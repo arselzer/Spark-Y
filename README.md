@@ -101,9 +101,8 @@ yannasparkis/
 │   ├── package.json
 │   └── Dockerfile
 │
-├── spark-eval-groupagg/     # Git submodule - benchmark queries
-├── spark/                   # Custom Spark JAR (gitignored)
-├── data/                    # Query data (gitignored)
+├── pyspark/                 # Custom PySpark package (gitignored)
+├── data/                    # Query data
 ├── scripts/                 # Setup and utility scripts
 ├── docker-compose.yml
 └── README.md
