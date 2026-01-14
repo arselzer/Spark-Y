@@ -1,0 +1,34 @@
+{
+  "name": "vldb-query-demo-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:check": "vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@codemirror/lang-sql": "^6.5.4",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.23.0",
+    "axios": "^1.6.7",
+    "codemirror": "^6.0.1",
+    "cytoscape": "^3.28.1",
+    "cytoscape-bubblesets": "^4.1.0",
+    "cytoscape-dagre": "^2.5.0",
+    "cytoscape-layers": "^3.1.0",
+    "dagre": "^0.8.5",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-codemirror": "^6.1.1",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "~5.4.0",
+    "vite": "^5.1.4",
+    "vue-tsc": "^2.0.6"
+  }
+}

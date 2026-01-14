@@ -1,0 +1,36 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.6.0
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+websockets==12.0
+
+# Spark
+# Standard PySpark (default)
+# Comment out if using custom PySpark package
+pyspark==3.5.0
+py4j==0.10.9.7
+
+# Custom PySpark with Yannakakis optimizations (optional)
+# Uncomment and comment out standard pyspark above to use:
+# pyspark @ https://github.com/arselzer/spark/releases/download/v4/pyspark-3.5.0.dev0.tar.gz
+
+# Data processing
+pandas==2.1.4
+pyarrow==14.0.2
+
+# SQL parsing
+sqlparse==0.4.4
+
+# PostgreSQL
+psycopg2-binary==2.9.9
+
+# HTTP client (for Spark REST API metrics collection)
+requests==2.31.0
+
+# CORS
+python-dotenv==1.0.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0

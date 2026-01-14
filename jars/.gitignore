@@ -1,0 +1,5 @@
+# Ignore all JAR files
+*.jar
+
+# But keep this README
+!README.md

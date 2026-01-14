@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: spark-y-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=imdb
+    # Port mapping is optional - only needed for external access
+    # Comment out if you get port conflicts or want to use external postgres
+    ports:
+      - "5433:5432"  # Using 5433 externally to avoid conflicts with existing postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Mount initialization script for multi-user setup
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - spark-y-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        # PySpark variant selection:
+        #   - standard: Standard PySpark from PyPI (default)
+        #   - custom-url: Custom PySpark from URL (downloaded during build)
+        #   - custom-local: Custom PySpark from local file (./pyspark/*.tar.gz or *.whl)
+        - PYSPARK_VARIANT=${PYSPARK_VARIANT:-custom-local}
+    container_name: spark-y-backend
+    ports:
+      - "8000:8000"   # FastAPI backend
+      - "4060:4040"   # Spark Web UI
+    volumes:
+      # Mount the spark-eval-groupagg repository
+      - ./spark-eval-groupagg:/app/spark-eval-groupagg:ro
+      # Mount custom Spark JAR (optional, if you have the JAR file)
+      # Note: Only uncomment after placing the JAR at ./spark/custom-spark-sql.jar
+      # - ./spark/custom-spark-sql.jar:/app/spark/custom-spark-sql.jar:ro
+      # Mount local PySpark package directory (for custom-local variant)
+      # Place your custom PySpark .tar.gz or .whl file in ./pyspark/
+      - ./pyspark:/app/pyspark:ro
+      # Mount data directory
+      - ./data:/app/data
+      # Mount postgres JDBC driver
+      - ./jars/postgresql-42.7.1.jar:/app/jars/postgresql-42.7.1.jar:ro
+    environment:
+      - PYSPARK_PYTHON=python3
+      - SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
+      # PySpark variant (must match build arg)
+      - PYSPARK_VARIANT=${PYSPARK_VARIANT:-custom-local}
+      # Spark memory settings - increase if importing very large databases
+      - SPARK_DRIVER_MEMORY=16g
+      - SPARK_EXECUTOR_MEMORY=16g
+      # PostgreSQL connection defaults (can be overridden in UI)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=imdb
+    networks:
+      - spark-y-network
+    # Allow backend to access databases on host machine
+    # host.docker.internal works on Mac/Windows and newer Linux Docker versions
+    # host.local.db provides a more reliable alternative for Linux using the Docker bridge IP
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.local.db:172.17.0.1"  # Linux-friendly: Docker bridge gateway IP
+    # Backend can start without waiting for postgres to be healthy (useful for external DBs)
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: spark-y-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - spark-y-network
+    restart: unless-stopped
+
+  # Optional: Development frontend with hot reload
+  frontend-dev:
+    image: node:20-alpine
+    container_name: spark-y-frontend-dev
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host"
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+    depends_on:
+      - backend
+    networks:
+      - spark-y-network
+    profiles:
+      - dev
+
+networks:
+  spark-y-network:
+    driver: bridge
+
+volumes:
+  spark-data:
+  postgres-data:

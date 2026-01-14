@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Spark
+spark-*.tgz
+/spark/
+*.jar
+!backend/app/hypergraph/*.jar
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Custom PySpark packages (local installation)
+/pyspark/
+*.tar.gz
+*.whl
+!requirements*.txt
+
+# Node
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+data/tpch/
+# data/job/ is now committed (queries with movie_info_idx -> movie_info rewrite)
+# Keep SQL dumps directory structure but ignore actual dump files
+data/sql-dumps/*.sql
+*.parquet
+*.csv
+!queries/*.csv
+
+# Environment
+.env
+.env.local
+
+# Docker
+*.pid

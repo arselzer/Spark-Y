@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Logical Plan JSON Structure Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e5e7eb;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #60a5fa;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #e5e7eb;
+            border: 1px solid #444;
+            padding: 10px;
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        pre {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .success { color: #48bb78; }
+        .warning { color: #ed8936; }
+        .error { color: #f56565; }
+    </style>
+</head>
+<body>
+    <h1>Logical Plan JSON Structure Analyzer</h1>
+
+    <div class="section">
+        <h2>Instructions</h2>
+        <p>1. Run a query in the main application</p>
+        <p>2. Open browser DevTools → Network tab</p>
+        <p>3. Find the API request to <code>/api/execution/execute</code></p>
+        <p>4. Copy the <code>optimized_logical_plan_json</code> field from the response</p>
+        <p>5. Paste it into the textarea below and click "Analyze"</p>
+    </div>
+
+    <div class="section">
+        <h2>Paste JSON Here</h2>
+        <textarea id="jsonInput" placeholder='Paste the optimized_logical_plan_json value here...'></textarea>
+        <br><br>
+        <button onclick="analyzeJSON()">Analyze JSON Structure</button>
+    </div>
+
+    <div class="section">
+        <h2>Analysis Results</h2>
+        <pre id="output">Waiting for input...</pre>
+    </div>
+
+    <script>
+        function analyzeJSON() {
+            const input = document.getElementById('jsonInput').value;
+            const output = document.getElementById('output');
+
+            if (!input.trim()) {
+                output.innerHTML = '<span class="error">Error: Please paste JSON data first</span>';
+                return;
+            }
+
+            try {
+                const parsed = JSON.parse(input);
+                let result = '';
+
+                result += '='.repeat(80) + '\n';
+                result += 'BASIC STRUCTURE ANALYSIS\n';
+                result += '='.repeat(80) + '\n\n';
+
+                result += `Type: ${typeof parsed}\n`;
+                result += `Is Array: ${Array.isArray(parsed)}\n`;
+                result += `Is Object: ${typeof parsed === 'object' && !Array.isArray(parsed)}\n\n`;
+
+                if (Array.isArray(parsed)) {
+                    result += `<span class="success">✓ It's an array!</span>\n`;
+                    result += `Array length: ${parsed.length}\n\n`;
+
+                    if (parsed.length > 0) {
+                        result += '='.repeat(80) + '\n';
+                        result += 'FIRST ELEMENT ANALYSIS\n';
+                        result += '='.repeat(80) + '\n\n';
+
+                        const first = parsed[0];
+                        result += `First element type: ${typeof first}\n`;
+                        result += `First element is object: ${typeof first === 'object'}\n\n`;
+
+                        if (typeof first === 'object') {
+                            result += `Keys: ${Object.keys(first).join(', ')}\n\n`;
+                            result += `class: ${first.class || 'N/A'}\n`;
+                            result += `num-children: ${first['num-children'] ?? 'N/A'}\n`;
+                            result += `Has 'child' field: ${('child' in first)}\n`;
+                            result += `child value: ${first.child ?? 'N/A'}\n`;
+                            result += `Has 'left' field: ${('left' in first)}\n`;
+                            result += `left value: ${first.left ?? 'N/A'}\n`;
+                            result += `Has 'right' field: ${('right' in first)}\n`;
+                            result += `right value: ${first.right ?? 'N/A'}\n`;
+                            result += `Has 'children' field: ${('children' in first)}\n`;
+
+                            if ('children' in first) {
+                                result += `'children' type: ${typeof first.children}\n`;
+                                result += `'children' is array: ${Array.isArray(first.children)}\n`;
+
+                                if (Array.isArray(first.children)) {
+                                    result += `'children' length: ${first.children.length}\n`;
+
+                                    if (first.children.length > 0) {
+                                        result += `<span class="success">✓ First element HAS nested children!</span>\n`;
+                                        result += `First child type: ${typeof first.children[0]}\n`;
+
+                                        if (typeof first.children[0] === 'object') {
+                                            result += `First child is object (nested): <span class="success">YES</span>\n`;
+                                            result += `First child class: ${first.children[0].class || 'N/A'}\n`;
+                                        } else if (typeof first.children[0] === 'number') {
+                                            result += `First child is number (index): <span class="warning">YES</span>\n`;
+                                            result += `First child value: ${first.children[0]}\n`;
+                                        }
+                                    } else {
+                                        result += `<span class="warning">⚠ 'children' array is EMPTY</span>\n`;
+                                    }
+                                }
+                            }
+                        }
+
+                        result += '\n' + '='.repeat(80) + '\n';
+                        result += 'CHECKING ALL ELEMENTS PATTERN\n';
+                        result += '='.repeat(80) + '\n\n';
+
+                        const childValues = new Set();
+                        const leftValues = new Set();
+                        const rightValues = new Set();
+                        let elementsWithChildren = 0;
+                        let elementsWithEmptyChildren = 0;
+
+                        for (let i = 0; i < Math.min(20, parsed.length); i++) {
+                            const elem = parsed[i];
+                            if ('child' in elem && typeof elem.child === 'number') {
+                                childValues.add(elem.child);
+                            }
+                            if ('left' in elem && typeof elem.left === 'number') {
+                                leftValues.add(elem.left);
+                            }
+                            if ('right' in elem && typeof elem.right === 'number') {
+                                rightValues.add(elem.right);
+                            }
+                            if ('children' in elem && Array.isArray(elem.children)) {
+                                if (elem.children.length > 0) {
+                                    elementsWithChildren++;
+                                } else {
+                                    elementsWithEmptyChildren++;
+                                }
+                            }
+                        }
+
+                        result += `Unique 'child' values in first 20 elements: ${Array.from(childValues).sort((a,b) => a-b).join(', ')}\n`;
+                        result += `Unique 'left' values in first 20 elements: ${Array.from(leftValues).sort((a,b) => a-b).join(', ')}\n`;
+                        result += `Unique 'right' values in first 20 elements: ${Array.from(rightValues).sort((a,b) => a-b).join(', ')}\n\n`;
+
+                        if (childValues.size <= 2 && leftValues.size <= 2) {
+                            result += `<span class="warning">⚠ WARNING: Most nodes reference only indices 0-1!</span>\n`;
+                            result += `This suggests 'child', 'left', 'right' are NOT array indices!\n`;
+                            result += `They might be:\n`;
+                            result += `  - Child position indicators (0=first, 1=second)\n`;
+                            result += `  - Sentinel/placeholder values\n`;
+                            result += `  - Something else entirely\n\n`;
+                        }
+
+                        result += `Elements with non-empty 'children' arrays: ${elementsWithChildren}\n`;
+                        result += `Elements with empty 'children' arrays: ${elementsWithEmptyChildren}\n\n`;
+
+                        if (elementsWithChildren > 0) {
+                            result += `<span class="success">✓ Some elements have nested children objects!</span>\n`;
+                        } else {
+                            result += `<span class="error">✗ NO elements have nested children!</span>\n`;
+                        }
+
+                        result += '\n' + '='.repeat(80) + '\n';
+                        result += 'FIRST 3 ELEMENTS (FULL DUMP)\n';
+                        result += '='.repeat(80) + '\n\n';
+
+                        for (let i = 0; i < Math.min(3, parsed.length); i++) {
+                            result += `--- Element ${i} ---\n`;
+                            result += JSON.stringify(parsed[i], null, 2) + '\n\n';
+                        }
+                    }
+                } else if (typeof parsed === 'object') {
+                    result += '<span class="success">✓ It\'s a single object (tree root)!</span>\n';
+                    result += `Root keys: ${Object.keys(parsed).join(', ')}\n`;
+                    result += `class: ${parsed.class || 'N/A'}\n`;
+                    result += `Has 'children': ${('children' in parsed)}\n`;
+
+                    if ('children' in parsed && Array.isArray(parsed.children)) {
+                        result += `children length: ${parsed.children.length}\n`;
+                    }
+                }
+
+                output.innerHTML = result;
+
+            } catch (e) {
+                output.innerHTML = `<span class="error">Error parsing JSON: ${e.message}</span>\n\nPlease check that you pasted valid JSON.`;
+            }
+        }
+    </script>
+</body>
+</html>
