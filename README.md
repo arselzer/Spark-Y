@@ -1,6 +1,6 @@
 # Spark-Y
 
-Interactive demonstration of **"Avoiding Materialisation for Guarded Aggregate Queries"** (presented at VLDB 2025).
+Interactive demonstration of **["Avoiding Materialisation for Guarded Aggregate Queries"](https://www.vldb.org/pvldb/vol18/p1398-selzer.pdf)** (presented at VLDB 2025).
 
 This web application demonstrates query optimisation techniques in Apache Spark SQL that avoid materialising intermediate join results for acyclic queries with aggregates.
 
@@ -48,11 +48,9 @@ This will download the custom PySpark package from GitHub releases and place it 
 
 #### Option B: Copy into directory
 
-Copy a PySpark packacke into `pyspark/`
+Copy a PySpark package into `pyspark/`
 
 ### 4. Start the Application
-
-#### Production Mode (recommended)
 
 ```bash
 docker-compose up
