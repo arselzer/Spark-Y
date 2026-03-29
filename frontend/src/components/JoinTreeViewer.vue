@@ -48,6 +48,10 @@
           <option value="cose-bilkent">Force-Directed</option>
         </select>
       </div>
+      <label class="toggle-label">
+        <input type="checkbox" v-model="showEdgeLabels" @change="toggleEdgeLabels" />
+        Edge Labels
+      </label>
       <button @click="fitGraph" class="btn btn-secondary">Fit to View</button>
       <div class="export-dropdown">
         <button @click="toggleExportMenu" class="btn btn-secondary export-btn">
@@ -95,6 +99,7 @@ const tooltipData = ref<{
 } | null>(null)
 
 const selectedLayout = ref('breadthfirst')
+const showEdgeLabels = ref(true)
 const showExportMenu = ref(false)
 
 // Convert join tree to Cytoscape elements
@@ -298,6 +303,29 @@ const fitGraph = () => {
   if (cy) {
     cy.fit(undefined, 50)
   }
+}
+
+const toggleEdgeLabels = () => {
+  if (!cy) return
+
+  if (showEdgeLabels.value) {
+    cy.edges().style('label', (ele: any) => ele.data('label') || '')
+    cy.edges().style('font-size', '14px')
+  } else {
+    cy.edges().style('label', '')
+  }
+
+  // Re-layout with tighter spacing when labels are hidden
+  const spacingFactor = showEdgeLabels.value ? 1.75 : 1.2
+  const layout = cy.layout({
+    name: selectedLayout.value === 'dagre' ? 'breadthfirst' : (selectedLayout.value === 'cose-bilkent' ? 'cose' : selectedLayout.value),
+    directed: true,
+    spacingFactor: spacingFactor,
+    padding: showEdgeLabels.value ? 40 : 20,
+    animate: true,
+    animationDuration: 500
+  })
+  layout.run()
 }
 
 const toggleExportMenu = () => {
@@ -528,6 +556,22 @@ onMounted(() => {
   outline: none;
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 
 /* Export dropdown */
