@@ -127,9 +127,9 @@ const convertToElements = (): ElementDefinition[] => {
         sharedAttrs = parentNode.shared_attributes[node.id]
       }
 
-      // Format label: show first few shared attributes
+      // Format label: show all shared attributes
       const label = sharedAttrs.length > 0
-        ? sharedAttrs.slice(0, 2).join(', ') + (sharedAttrs.length > 2 ? '...' : '')
+        ? sharedAttrs.join(', ')
         : ''
 
       elements.push({
@@ -165,10 +165,10 @@ const initializeCytoscape = () => {
           'color': '#fff',
           'text-valign': 'center',
           'text-halign': 'center',
-          'font-size': '14px',
+          'font-size': '20px',
           'font-weight': 'bold',
-          'width': '80px',
-          'height': '50px',
+          'width': '110px',
+          'height': '60px',
           'shape': 'roundrectangle',
           'border-width': '2px',
           'border-color': '#2563eb',
@@ -194,12 +194,15 @@ const initializeCytoscape = () => {
           'curve-style': 'bezier',
           'arrow-scale': 1.5,
           'label': 'data(label)',
-          'font-size': '10px',
+          'font-size': '14px',
+          'font-weight': 'bold',
           'text-rotation': 'autorotate',
           'text-background-color': '#ffffff',
-          'text-background-opacity': 0.8,
-          'text-background-padding': '2px',
-          'color': '#64748b'
+          'text-background-opacity': 0.95,
+          'text-background-padding': '4px',
+          'text-background-shape': 'roundrectangle',
+          'color': '#334155',
+          'text-margin-y': -10
         }
       },
       {
@@ -214,8 +217,8 @@ const initializeCytoscape = () => {
     layout: {
       name: 'breadthfirst',
       directed: true,
-      spacingFactor: 1.5,
-      padding: 30,
+      spacingFactor: 1.75,
+      padding: 40,
       animate: true,
       animationDuration: 500
     },
