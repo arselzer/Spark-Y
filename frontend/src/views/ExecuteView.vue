@@ -929,7 +929,7 @@ function startResize(event: MouseEvent) {
 
 .viz-panel.join-tree-panel {
   margin-top: 1rem;
-  min-height: 640px;
+  min-height: 760px;
 }
 
 /* Tablet and mobile responsive */

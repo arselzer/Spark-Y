@@ -395,7 +395,7 @@ function executeQuery() {
 
 .viz-panel.join-tree-panel {
   margin-top: 1rem;
-  min-height: 400px;
+  min-height: 760px;
 }
 
 @media (max-width: 1200px) {
@@ -404,7 +404,7 @@ function executeQuery() {
   }
 
   .viz-panel.join-tree-panel {
-    min-height: 350px;
+    min-height: 700px;
   }
 }
 
