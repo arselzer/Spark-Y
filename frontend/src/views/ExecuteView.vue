@@ -3,6 +3,7 @@
     <div class="execute-view-container" :class="{ 'with-sidebar': showHistory }">
       <!-- Query History Sidebar -->
       <div v-if="showHistory" class="history-sidebar">
+        <SavedRuns ref="savedRunsRef" @replay="replaySavedRun" />
         <QueryHistory @select="loadFromHistory" />
       </div>
 
@@ -18,12 +19,21 @@
           </div>
           <div class="header-actions">
             <button
+              v-if="executionResult?.optimized_metrics"
+              @click="saveCurrentRun"
+              class="btn btn-primary save-run-btn"
+              :disabled="saving"
+              title="Save this run for instant replay later"
+            >
+              {{ saving ? 'Saving…' : (justSaved ? '✓ Saved' : '💾 Save run') }}
+            </button>
+            <button
               @click="showHistory = !showHistory"
               class="btn btn-secondary history-toggle"
               :class="{ active: showHistory }"
               :title="showHistory ? 'Hide history' : 'Show history'"
             >
-              <span class="label">{{ showHistory ? 'Hide History' : 'History' }}</span>
+              <span class="label">{{ showHistory ? 'Hide History' : 'History & Saved' }}</span>
             </button>
           </div>
         </div>
@@ -54,12 +64,20 @@
         <div class="editor-header">
           <div class="editor-title-group">
             <h3>Query Editor</h3>
-            <label class="sidebar-toggle" title="Show hypergraph beside editor">
+            <label class="sidebar-toggle" title="Show the hypergraph beside the editor (appears after you run a query)">
               <input type="checkbox" v-model="showHypergraphSidebar" />
               <span>Show hypergraph sidebar</span>
             </label>
           </div>
           <div class="editor-controls">
+            <button
+              @click="formatCurrentQuery"
+              class="btn btn-secondary"
+              :disabled="!sqlQuery.trim()"
+              title="Pretty-print the SQL"
+            >
+              Format
+            </button>
             <button
               @click="executeQuery"
               class="btn btn-primary execute-btn"
@@ -86,7 +104,7 @@
         <!-- Resizable Editor + Hypergraph Container -->
         <div v-if="showHypergraphSidebar && (visualizationData || hypergraphData)" class="editor-hypergraph-container">
           <div class="editor-panel" :style="{ width: editorWidth + 'px' }">
-            <QueryEditor v-model="sqlQuery" @execute="executeQuery" />
+            <QueryEditor ref="editorRef" v-model="sqlQuery" @execute="executeQuery" />
           </div>
           <div
             class="resize-handle"
@@ -115,10 +133,20 @@
                 >
                   Bubble Sets
                 </button>
+                <button
+                  :class="['mini-tab', { active: sidebarVizMode === 'upset' }]"
+                  @click="sidebarVizMode = 'upset'"
+                >
+                  UpSet
+                </button>
               </div>
               <div class="sidebar-viz-container">
+                <UpSetViewer
+                  v-if="sidebarVizMode === 'upset' && hypergraphData"
+                  :hypergraph="hypergraphData"
+                />
                 <HypergraphViewer
-                  v-if="visualizationData"
+                  v-else-if="visualizationData"
                   :visualization-data="visualizationData"
                   :show-bubble-sets="sidebarVizMode === 'bubbles'"
                   :show-convex-hulls="sidebarVizMode === 'hulls'"
@@ -128,7 +156,7 @@
           </div>
         </div>
         <div v-else>
-          <QueryEditor v-model="sqlQuery" @execute="executeQuery" />
+          <QueryEditor ref="editorRef" v-model="sqlQuery" @execute="executeQuery" />
         </div>
 
 
@@ -169,127 +197,119 @@
         </div>
       </div>
 
-      <!-- Hypergraph Visualization -->
-      <div v-if="visualizationData || hypergraphData" class="section">
+      <!-- Query Structure — only when the hypergraph sidebar is OFF. When the
+           sidebar is on, the hypergraph and UpSet live there (mini-tabs), so we
+           don't repeat them here. Tabs: Hypergraph / UpSet. -->
+      <div v-if="!showHypergraphSidebar && (visualizationData || hypergraphData)" class="section">
         <div v-if="visualizationData && visualizationData.stats.num_nodes === 0 && visualizationData.stats.num_edges === 0" class="info-message">
           <strong>No hypergraph to visualize.</strong> The query may not contain joins or tables.
         </div>
         <div v-else>
-          <!-- Visualization mode tabs -->
           <div class="viz-tabs">
             <button
-              :class="['tab-button', { active: vizMode === 'graph' }]"
-              @click="vizMode = 'graph'"
+              :class="['tab-button', { active: structureTab === 'hypergraph' }]"
+              @click="structureTab = 'hypergraph'"
             >
-              Graph View
+              Hypergraph
             </button>
             <button
-              :class="['tab-button', { active: vizMode === 'graph-bubbles' }]"
-              @click="vizMode = 'graph-bubbles'"
-            >
-              Graph + Pie Charts
-            </button>
-            <button
-              :class="['tab-button', { active: vizMode === 'bubble-sets' }]"
-              @click="vizMode = 'bubble-sets'"
-            >
-              Bubble Sets (Convex Hulls)
-            </button>
-            <button
-              :class="['tab-button', { active: vizMode === 'upset' }]"
-              @click="vizMode = 'upset'"
+              :class="['tab-button', { active: structureTab === 'upset' }]"
+              @click="structureTab = 'upset'"
             >
               UpSet Plot
             </button>
           </div>
 
-          <!-- Visualization components -->
-          <div v-if="vizMode === 'graph' || vizMode === 'graph-bubbles' || vizMode === 'bubble-sets'" class="visualization-container">
-            <div class="viz-panel">
-              <HypergraphViewer
-                v-if="visualizationData"
-                :visualization-data="visualizationData"
-                :show-bubble-sets="vizMode === 'graph-bubbles'"
-                :show-convex-hulls="vizMode === 'bubble-sets'"
-              />
-            </div>
-            <div v-if="hasJoinTree" class="viz-panel join-tree-panel">
-              <JoinTreeViewer :join-tree="hypergraphData?.join_tree" />
-            </div>
+          <div v-if="structureTab === 'hypergraph'" class="viz-panel">
+            <HypergraphViewer
+              v-if="visualizationData"
+              :visualization-data="visualizationData"
+            />
           </div>
           <UpSetViewer
-            v-if="hypergraphData && vizMode === 'upset'"
+            v-else-if="hypergraphData && structureTab === 'upset'"
             :hypergraph="hypergraphData"
           />
         </div>
       </div>
 
-      <!-- GYO Animation Section (combined graph + steps) -->
-      <div v-if="hasGYOSteps" class="section gyo-animation-section">
-        <div class="gyo-section-header" @click="gyoSectionExpanded = !gyoSectionExpanded">
-          <div class="gyo-header-content">
-            <h3 class="section-title">GYO Algorithm Animation</h3>
-            <span class="expand-icon">{{ gyoSectionExpanded ? '▼' : '▶' }}</span>
-          </div>
-          <p v-if="!gyoSectionExpanded" class="section-description-collapsed">
-            Click to watch the GYO algorithm reduce the hypergraph step-by-step
-          </p>
+      <!-- Join tree beside the Spark SQL query plans (uses the width the
+           narrow join tree would otherwise waste) -->
+      <div
+        v-if="(executionResult?.original_plan && executionResult?.optimized_plan) || hasJoinTree"
+        class="plans-row"
+      >
+        <div v-if="hasJoinTree" class="plans-row-tree">
+          <JoinTreeViewer :join-tree="hypergraphData?.join_tree" :alias-map="aliasMap" />
         </div>
-
-        <div v-if="gyoSectionExpanded" class="gyo-animation-content">
-          <p class="section-description">
-            Watch the GYO (Graham-Yu-Özsoyoglu) algorithm reduce the hypergraph step-by-step.
-            Elements being removed are highlighted in red, already removed elements are grayed out.
-          </p>
-
-          <div class="gyo-animation-container">
-          <!-- Hypergraph visualization -->
-          <div class="gyo-graph-panel">
-            <HypergraphViewer
-              v-if="visualizationData"
-              :visualization-data="visualizationData"
-              :show-bubble-sets="false"
-              :gyo-step="currentGYOStep"
-              :gyo-steps="hypergraphData?.gyo_steps"
-            />
-          </div>
-
-          <!-- GYO step controls -->
-          <div class="gyo-steps-panel">
-            <GYOStepViewer
-              :steps="hypergraphData?.gyo_steps"
-              :hypergraph="hypergraphData"
-              @step-change="handleGYOStepChange"
-            />
-          </div>
-        </div>
+        <div class="plans-row-plan">
+          <SparkQueryPlanComparison
+            v-if="executionResult?.original_plan && executionResult?.optimized_plan"
+            :reference-plan="executionResult.original_plan"
+            :optimized-plan="executionResult.optimized_plan"
+          />
         </div>
       </div>
 
-      <!-- Query Complexity Metrics -->
-      <QueryComplexityMetrics
-        v-if="hypergraphData?.complexity_metrics"
-        :metrics="hypergraphData.complexity_metrics"
-        :is-acyclic="hypergraphData.is_acyclic"
-      />
-
-      <!-- Spark SQL Query Plan Comparison -->
-      <SparkQueryPlanComparison
-        v-if="executionResult?.original_plan && executionResult?.optimized_plan"
-        :reference-plan="executionResult.original_plan"
-        :optimized-plan="executionResult.optimized_plan"
-      />
-
-      <!-- Performance Comparison -->
+      <!-- Performance Comparison (renders as long as the optimised side ran;
+           reference may be a timed-out placeholder). Query Complexity is
+           injected below the DAG and the GYO animation below the timeline. -->
       <PerformanceComparison
-        v-if="executionResult?.original_metrics && executionResult?.optimized_metrics"
+        v-if="executionResult?.optimized_metrics"
         :reference-metrics="executionResult.original_metrics"
         :optimized-metrics="executionResult.optimized_metrics"
         :reference-plan="executionResult.original_plan"
         :optimized-plan="executionResult.optimized_plan"
         :visualization-data="visualizationData"
         :hypergraph-data="hypergraphData"
-      />
+      >
+        <template #after-dag>
+          <QueryComplexityMetrics
+            v-if="hypergraphData?.complexity_metrics"
+            :metrics="hypergraphData.complexity_metrics"
+            :is-acyclic="hypergraphData.is_acyclic"
+          />
+        </template>
+
+        <template #after-timeline>
+          <div v-if="hasGYOSteps" class="section gyo-animation-section">
+            <div class="gyo-section-header" @click="gyoSectionExpanded = !gyoSectionExpanded">
+              <div class="gyo-header-content">
+                <h3 class="section-title">GYO Algorithm Animation</h3>
+                <span class="expand-icon">{{ gyoSectionExpanded ? '▼' : '▶' }}</span>
+              </div>
+              <p v-if="!gyoSectionExpanded" class="section-description-collapsed">
+                Click to watch the GYO algorithm reduce the hypergraph step-by-step
+              </p>
+            </div>
+
+            <div v-if="gyoSectionExpanded" class="gyo-animation-content">
+              <p class="section-description">
+                Watch the GYO (Graham-Yu-Özsoyoglu) algorithm reduce the hypergraph step-by-step.
+                Elements being removed are highlighted in red, already removed elements are grayed out.
+              </p>
+              <div class="gyo-animation-container">
+                <div class="gyo-graph-panel">
+                  <HypergraphViewer
+                    v-if="visualizationData"
+                    :visualization-data="visualizationData"
+                    :show-bubble-sets="false"
+                    :gyo-step="currentGYOStep"
+                    :gyo-steps="hypergraphData?.gyo_steps"
+                  />
+                </div>
+                <div class="gyo-steps-panel">
+                  <GYOStepViewer
+                    :steps="hypergraphData?.gyo_steps"
+                    :hypergraph="hypergraphData"
+                    @step-change="handleGYOStepChange"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </PerformanceComparison>
       </div>
     </div>
   </div>
@@ -303,10 +323,11 @@ import HypergraphViewer from '@/components/HypergraphViewer.vue'
 import JoinTreeViewer from '@/components/JoinTreeViewer.vue'
 import GYOStepViewer from '@/components/GYOStepViewer.vue'
 import QueryHistory from '@/components/QueryHistory.vue'
+import SavedRuns from '@/components/SavedRuns.vue'
+import { parseAliasMap } from '@/utils/sql'
 import QueryComplexityMetrics from '@/components/QueryComplexityMetrics.vue'
 import UpSetViewer from '@/components/UpSetViewer.vue'
 import SparkQueryPlanComparison from '@/components/SparkQueryPlanComparison.vue'
-import ExecutionComparison from '@/components/ExecutionComparison.vue'
 import PerformanceComparison from '@/components/PerformanceComparison.vue'
 import { executionApi, hypergraphApi } from '@/services/api'
 import { useQueryHistory } from '@/composables/useQueryHistory'
@@ -319,9 +340,18 @@ const { preferences, setEditorWidth, setShowHypergraphSidebar, setSidebarVizMode
 
 // UI state - initialize from preferences
 const showHistory = ref(false)
+const savedRunsRef = ref<InstanceType<typeof SavedRuns> | null>(null)
+// Whichever QueryEditor instance is mounted (sidebar or full-width). Format is
+// triggered from the single header above, so the editor isn't double-headed.
+const editorRef = ref<any>(null)
+function formatCurrentQuery() {
+  editorRef.value?.formatQuery?.()
+}
+const saving = ref(false)
+const justSaved = ref(false)
 const showHypergraphSidebar = ref(preferences.value.showHypergraphSidebar)
 const editorWidth = ref(preferences.value.editorWidth)
-const sidebarVizMode = ref<'graph' | 'bubbles' | 'hulls'>(preferences.value.sidebarVizMode)
+const sidebarVizMode = ref<'graph' | 'bubbles' | 'hulls' | 'upset'>(preferences.value.sidebarVizMode)
 const isResizing = ref(false)
 
 // Watch for changes and save to preferences
@@ -365,7 +395,13 @@ const copiedFeedback = ref(false)
 const executionResult = ref<ExecutionResult | null>(null)
 const visualizationData = ref<VisualizationData | null>(null)
 const hypergraphData = ref<Hypergraph | null>(null)
-const vizMode = ref<'graph' | 'graph-bubbles' | 'bubble-sets' | 'upset'>('graph')
+// Which "Query Structure" tab is shown (the join tree now lives beside the
+// Spark plans, so this is just Hypergraph / UpSet).
+const structureTab = ref<'hypergraph' | 'upset'>('hypergraph')
+
+// alias -> table map from the executed SQL, so the join tree can label nodes
+// as "comments (c)" rather than just the alias.
+const aliasMap = computed(() => parseAliasMap(executionResult.value?.sql || sqlQuery.value))
 
 // Helper functions
 function formatTimestamp(date: Date): string {
@@ -451,11 +487,17 @@ function retryExecution() {
   executeQuery()
 }
 
-// Cancel execution
-function cancelExecution() {
+// Cancel execution: stop the local fetch AND ask the backend to cancel the
+// Spark job group, otherwise Spark keeps churning after we hang up.
+async function cancelExecution() {
   if (abortController) {
     abortController.abort()
     abortController = null
+  }
+  try {
+    await fetch('/api/execution/cancel', { method: 'POST' })
+  } catch (err) {
+    console.warn('Backend cancel request failed', err)
   }
   loading.value = false
   loadingProgress.value = 0
@@ -472,6 +514,10 @@ const hasJoinTree = computed(() => {
          hypergraphData.value.join_tree.length > 0 &&
          hypergraphData.value.is_acyclic
 })
+
+// The standalone structure section only renders when the sidebar is off, so it
+// always defaults to the hypergraph tab (UpSet is reachable via its tab there,
+// and via the sidebar mini-tab when the sidebar is on).
 
 // Check if we have GYO steps for animation
 const hasGYOSteps = computed(() => {
@@ -524,6 +570,60 @@ async function checkSparkHealth() {
 const loadFromHistory = (sql: string) => {
   sqlQuery.value = sql
   showHistory.value = false // Hide sidebar after selection
+}
+
+// Persist the current result so it can be replayed instantly later.
+async function saveCurrentRun() {
+  if (!executionResult.value) return
+  saving.value = true
+  try {
+    await executionApi.saveRun(executionResult.value)
+    justSaved.value = true
+    setTimeout(() => { justSaved.value = false }, 2500)
+    // Refresh the sidebar list if it's mounted.
+    savedRunsRef.value?.load()
+  } catch (err: any) {
+    error.value = err?.response?.data?.detail || err?.message || 'Failed to save run'
+  } finally {
+    saving.value = false
+  }
+}
+
+// Replay a saved run: restore its full result instantly (no re-execution),
+// then re-derive the hypergraph (planning only — cheap) for the visualisations.
+async function replaySavedRun(id: string) {
+  loading.value = true
+  error.value = ''
+  errorSuggestion.value = ''
+  loadingStage.value = 'Loading saved run…'
+  loadingProgress.value = 40
+  try {
+    const saved = await executionApi.getSavedRun(id)
+    sqlQuery.value = saved.result.sql
+    executionResult.value = saved.result
+    sparkConnected.value = true
+
+    // Re-derive the hypergraph for the structure visualisations.
+    loadingStage.value = 'Rebuilding visualisations…'
+    loadingProgress.value = 80
+    try {
+      const hypergraph = await hypergraphApi.extractHypergraph(saved.result.sql, undefined, true)
+      hypergraphData.value = hypergraph
+      currentGYOStep.value = (hypergraph.gyo_steps && hypergraph.gyo_steps.length > 0) ? 0 : null
+      visualizationData.value = await hypergraphApi.generateVisualization(hypergraph)
+    } catch (vizErr) {
+      // The saved metrics/plans still render even if hypergraph extraction fails.
+      console.warn('Could not rebuild hypergraph for saved run', vizErr)
+    }
+
+    lastExecutionTime.value = new Date(saved.saved_at)
+    loadingProgress.value = 100
+  } catch (err: any) {
+    error.value = err?.response?.data?.detail || err?.message || 'Failed to load saved run'
+  } finally {
+    loading.value = false
+    loadingProgress.value = 0
+  }
 }
 
 async function executeQuery() {
@@ -743,8 +843,15 @@ function startResize(event: MouseEvent) {
 </script>
 
 <style scoped>
+/* Widen the execute/compare view beyond the global 1800px container so the
+   side-by-side reference/optimised visualisations have room to breathe on a
+   wide demo display, while staying responsive via the vw cap. */
+.container {
+  max-width: min(2000px, 95vw);
+}
+
 .execute-view {
-  max-width: 1400px;
+  max-width: min(2000px, 95vw);
   margin: 0 auto;
 }
 
@@ -765,7 +872,7 @@ function startResize(event: MouseEvent) {
 .loading-section {
   text-align: center;
   padding: 3rem;
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   margin-top: 2rem;
 }
@@ -796,7 +903,7 @@ function startResize(event: MouseEvent) {
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
-  border-bottom: 2px solid #E5E7EB;
+  border-bottom: 2px solid var(--color-border);
   padding-bottom: 0;
 }
 
@@ -808,20 +915,20 @@ function startResize(event: MouseEvent) {
   cursor: pointer;
   font-size: 0.938rem;
   font-weight: 500;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   transition: all 0.2s;
   position: relative;
   bottom: -2px;
 }
 
 .tab-button:hover {
-  color: #374151;
-  background: #F9FAFB;
+  color: var(--color-text);
+  background: var(--color-background-soft);
 }
 
 .tab-button.active {
-  color: #3B82F6;
-  border-bottom-color: #3B82F6;
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -834,9 +941,9 @@ function startResize(event: MouseEvent) {
 
 /* GYO Animation Section */
 .gyo-animation-section {
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border-radius: 0.5rem;
-  border: 2px solid #E5E7EB;
+  border: 2px solid var(--color-border);
   overflow: hidden;
 }
 
@@ -848,7 +955,7 @@ function startResize(event: MouseEvent) {
 }
 
 .gyo-section-header:hover {
-  background: #F3F4F6;
+  background: var(--color-background-mute);
 }
 
 .gyo-header-content {
@@ -861,18 +968,18 @@ function startResize(event: MouseEvent) {
   font-size: 1.5rem;
   font-weight: 600;
   margin: 0;
-  color: #1F2937;
+  color: var(--color-text);
 }
 
 .expand-icon {
   font-size: 1.25rem;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   transition: transform 0.2s;
 }
 
 .section-description-collapsed {
   font-size: 0.875rem;
-  color: #9CA3AF;
+  color: var(--color-text-secondary);
   margin: 0.5rem 0 0 0;
   font-style: italic;
 }
@@ -883,7 +990,7 @@ function startResize(event: MouseEvent) {
 
 .section-description {
   font-size: 0.938rem;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   margin: 0 0 1.5rem 0;
   line-height: 1.5;
 }
@@ -896,14 +1003,14 @@ function startResize(event: MouseEvent) {
 }
 
 .gyo-graph-panel {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .gyo-steps-panel {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -930,6 +1037,33 @@ function startResize(event: MouseEvent) {
 .viz-panel.join-tree-panel {
   margin-top: 1rem;
   min-height: 760px;
+}
+
+/* Join tree (narrow) beside the Spark plans (wide), to use the width. */
+.plans-row {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+  margin-top: 1.5rem;
+}
+
+.plans-row-tree {
+  flex: 0 0 34%;
+  min-width: 360px;
+}
+
+.plans-row-plan {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (max-width: 1200px) {
+  .plans-row {
+    flex-direction: column;
+  }
+  .plans-row-tree {
+    flex-basis: auto;
+  }
 }
 
 /* Tablet and mobile responsive */
@@ -983,7 +1117,7 @@ function startResize(event: MouseEvent) {
 .execute-view-container {
   display: flex;
   gap: 1.5rem;
-  max-width: 1800px;
+  max-width: min(2000px, 95vw);
   margin: 0 auto;
 }
 
@@ -1001,7 +1135,7 @@ function startResize(event: MouseEvent) {
 
 .execute-view {
   flex: 1;
-  max-width: 1400px;
+  max-width: min(2000px, 95vw);
   margin: 0 auto;
 }
 
@@ -1134,39 +1268,47 @@ function startResize(event: MouseEvent) {
   font-weight: 600;
 }
 
+/* AA-contrast text on the tinted fills (state is also marked by ✓/⚠ glyphs,
+   so it isn't conveyed by colour alone). */
 .badge-acyclic {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.4);
 }
 
 .badge-cyclic {
-  background: rgba(251, 191, 36, 0.1);
-  color: #f59e0b;
-  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
 .badge-guarded {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.4);
 }
 
 .badge-piecewise {
-  background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.12);
+  color: #4338ca;
+  border: 1px solid rgba(99, 102, 241, 0.4);
 }
 
 .badge-unguarded {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  border: 1px solid rgba(239, 68, 68, 0.4);
 }
+
+/* In dark mode, use lighter text on the same tints for contrast. */
+html.dark-mode .badge-acyclic, html.dark-mode .badge-guarded { color: #6ee7b7; }
+html.dark-mode .badge-cyclic { color: #fcd34d; }
+html.dark-mode .badge-piecewise { color: #a5b4fc; }
+html.dark-mode .badge-unguarded { color: #fca5a5; }
 
 .badge-unknown {
   background: rgba(107, 114, 128, 0.1);
-  color: #6b7280;
+  color: var(--color-text-secondary);
   border: 1px solid rgba(107, 114, 128, 0.3);
 }
 
@@ -1332,15 +1474,15 @@ function startResize(event: MouseEvent) {
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   transition: all 0.2s;
   position: relative;
   bottom: -1px;
 }
 
 .mini-tab:hover {
-  color: #374151;
-  background: #F9FAFB;
+  color: var(--color-text);
+  background: var(--color-background-soft);
 }
 
 .mini-tab.active {
@@ -1462,7 +1604,7 @@ function startResize(event: MouseEvent) {
 /* Enhanced Loading State */
 .loading-section.enhanced {
   padding: 3rem 2rem;
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.75rem;
   margin-top: 2rem;
   border: 1px solid var(--color-border);
@@ -1554,7 +1696,7 @@ function startResize(event: MouseEvent) {
 }
 
 .btn-text:hover {
-  background: white;
+  background: var(--color-surface);
   border-color: #dc2626;
   transform: translateY(-1px);
 }

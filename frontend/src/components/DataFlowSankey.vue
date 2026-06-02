@@ -2,7 +2,7 @@
   <div class="data-flow-sankey">
     <h4>Data Flow Visualization</h4>
     <p class="description">
-      Visual representation of data flowing through execution stages. Width indicates estimated data volume.
+      Data flowing through execution stages. Box height = rows processed per stage (log scale, shared across both plans).
     </p>
 
     <div class="flows-container">
@@ -14,36 +14,35 @@
             <!-- Stage box -->
             <rect
               :x="getStageX(index)"
-              :y="getStageY(stage, referenceStages)"
+              :y="getStageY(stage)"
               :width="stageWidth"
-              :height="getStageHeight(stage, referenceStages)"
+              :height="getStageHeight(stage)"
               :fill="getStageColor(stage.operator_types)"
               opacity="0.7"
               stroke="var(--color-border)"
               stroke-width="2"
             />
 
-            <!-- Stage label -->
+            <!-- Stage label: id + real row throughput -->
             <text
               :x="getStageX(index) + stageWidth / 2"
-              :y="getStageY(stage, referenceStages) + 20"
-              text-anchor="middle"
-              fill="white"
-              font-size="12"
-              font-weight="bold"
+              :y="getStageY(stage) + 18"
+              text-anchor="middle" fill="white" font-size="12" font-weight="bold"
             >
               Stage {{ stage.stage_id }}
+            </text>
+            <text
+              :x="getStageX(index) + stageWidth / 2"
+              :y="getStageY(stage) + 34"
+              text-anchor="middle" fill="white" font-size="12"
+            >
+              {{ formatRows(stageRows(stage)) }} rows
             </text>
 
             <!-- Flow connector to next stage -->
             <path
               v-if="index < referenceStages.length - 1"
-              :d="getFlowPath(
-                index,
-                stage,
-                referenceStages[index + 1],
-                referenceStages
-              )"
+              :d="getFlowPath(index, stage, referenceStages[index + 1])"
               fill="url(#gradient)"
               opacity="0.4"
             />
@@ -67,36 +66,35 @@
             <!-- Stage box -->
             <rect
               :x="getStageX(index)"
-              :y="getStageY(stage, optimizedStages)"
+              :y="getStageY(stage)"
               :width="stageWidth"
-              :height="getStageHeight(stage, optimizedStages)"
+              :height="getStageHeight(stage)"
               :fill="getStageColor(stage.operator_types)"
               opacity="0.7"
               stroke="var(--color-border)"
               stroke-width="2"
             />
 
-            <!-- Stage label -->
+            <!-- Stage label: id + real row throughput -->
             <text
               :x="getStageX(index) + stageWidth / 2"
-              :y="getStageY(stage, optimizedStages) + 20"
-              text-anchor="middle"
-              fill="white"
-              font-size="12"
-              font-weight="bold"
+              :y="getStageY(stage) + 18"
+              text-anchor="middle" fill="white" font-size="12" font-weight="bold"
             >
               Stage {{ stage.stage_id }}
+            </text>
+            <text
+              :x="getStageX(index) + stageWidth / 2"
+              :y="getStageY(stage) + 34"
+              text-anchor="middle" fill="white" font-size="12"
+            >
+              {{ formatRows(stageRows(stage)) }} rows
             </text>
 
             <!-- Flow connector to next stage -->
             <path
               v-if="index < optimizedStages.length - 1"
-              :d="getFlowPath(
-                index,
-                stage,
-                optimizedStages[index + 1],
-                optimizedStages
-              )"
+              :d="getFlowPath(index, stage, optimizedStages[index + 1])"
               fill="url(#gradient)"
               opacity="0.4"
             />
@@ -115,7 +113,12 @@ interface Stage {
   operators?: string[]
   operator_types?: string[]
   has_shuffle?: boolean
-  estimated_complexity?: number  // Optional - may be undefined for real stage metrics
+  estimated_complexity?: number
+  // Real per-stage row metrics (from the Spark REST collector).
+  input_records?: number
+  output_records?: number
+  shuffle_read_records?: number
+  shuffle_write_records?: number
 }
 
 interface ExecutionMetrics {
@@ -139,21 +142,48 @@ const minStageHeight = 40
 const referenceStages = computed(() => props.referenceMetrics.stages || [])
 const optimizedStages = computed(() => props.optimizedMetrics.stages || [])
 
+// Real rows moving through a stage: the largest of its record counts. Falls
+// back to estimated_complexity only when no real metrics are present.
+function stageRows(stage: Stage): number {
+  const real = Math.max(
+    stage.input_records || 0,
+    stage.output_records || 0,
+    stage.shuffle_read_records || 0,
+    stage.shuffle_write_records || 0
+  )
+  if (real > 0) return real
+  return stage.estimated_complexity || 0
+}
+
+// Shared max across BOTH plans so reference and optimised box heights are on
+// the same scale (otherwise a small optimised stage looks as tall as a huge
+// reference one). Log scale because row counts span many orders of magnitude.
+const sharedLogMax = computed(() => {
+  const all = [...referenceStages.value, ...optimizedStages.value].map(stageRows)
+  return Math.log10(Math.max(...all, 1) + 1)
+})
+
+function formatRows(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
+  return Math.round(n).toString()
+}
+
 function getStageX(index: number): number {
   return 50 + index * (stageWidth + stageGap)
 }
 
-function getStageY(stage: Stage, allStages: Stage[]): number {
-  // Center vertically, with height based on complexity
-  const height = getStageHeight(stage, allStages)
+function getStageY(stage: Stage): number {
+  const height = getStageHeight(stage)
   return (svgHeight - height) / 2
 }
 
-function getStageHeight(stage: Stage, allStages: Stage[]): number {
-  // Height proportional to complexity
-  // Use default value of 1 if estimated_complexity is undefined
-  const maxComplexity = Math.max(...allStages.map(s => s.estimated_complexity || 1), 1)
-  const ratio = (stage.estimated_complexity || 1) / maxComplexity
+function getStageHeight(stage: Stage): number {
+  // Height proportional to (log) real row throughput, normalised across both
+  // plans so the two Sankeys are directly comparable.
+  const rows = stageRows(stage)
+  const ratio = rows > 0 ? Math.log10(rows + 1) / sharedLogMax.value : 0
   return minStageHeight + (maxStageHeight - minStageHeight) * ratio
 }
 
@@ -170,19 +200,16 @@ function getStageColor(operatorTypes?: string[]): string {
 function getFlowPath(
   fromIndex: number,
   fromStage: Stage,
-  toStage: Stage,
-  allStages: Stage[]
+  toStage: Stage
 ): string {
   const x1 = getStageX(fromIndex) + stageWidth
   const x2 = getStageX(fromIndex + 1)
 
-  const y1Top = getStageY(fromStage, allStages)
-  const y1Bottom = y1Top + getStageHeight(fromStage, allStages)
-  const y1Mid = (y1Top + y1Bottom) / 2
+  const y1Top = getStageY(fromStage)
+  const y1Bottom = y1Top + getStageHeight(fromStage)
 
-  const y2Top = getStageY(toStage, allStages)
-  const y2Bottom = y2Top + getStageHeight(toStage, allStages)
-  const y2Mid = (y2Top + y2Bottom) / 2
+  const y2Top = getStageY(toStage)
+  const y2Bottom = y2Top + getStageHeight(toStage)
 
   // Create a curved path between stages
   const controlX = (x1 + x2) / 2

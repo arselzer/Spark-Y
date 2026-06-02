@@ -69,15 +69,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'
 import type { JoinTreeNode } from '@/types'
 
 interface Props {
   joinTree: JoinTreeNode[] | null | undefined
+  // Optional alias -> table name map (e.g. { c: 'comments' }); when provided,
+  // nodes render as "comments (c)" instead of just the alias.
+  aliasMap?: Record<string, string>
 }
 
 const props = defineProps<Props>()
+
+// Node label: "table (alias)" when the table name is known, else the alias.
+function nodeLabel(alias: string): string {
+  const table = props.aliasMap?.[alias] ?? props.aliasMap?.[alias?.toLowerCase()]
+  return table && table.toLowerCase() !== alias.toLowerCase() ? `${table} (${alias})` : alias
+}
+
+// Strip the Spark expr id suffix: "u.id#156" -> "u.id".
+const stripId = (a: string) => a.split('#')[0]
+
+// "parentAlias.col = childAlias.col" for the immediate join, picked from the
+// shared equivalence class by relation prefix; falls back to the shared list.
+function immediateJoinLabel(shared: string[], parentRel?: string, childRel?: string): string {
+  if (!shared || shared.length === 0) return ''
+  if (parentRel && childRel) {
+    const p = shared.find(a => a.toLowerCase().startsWith(parentRel.toLowerCase() + '.'))
+    const c = shared.find(a => a.toLowerCase().startsWith(childRel.toLowerCase() + '.'))
+    if (p && c) return `${stripId(p)} = ${stripId(c)}`
+  }
+  return shared.map(stripId).join(', ')
+}
 
 const cyContainer = ref<HTMLElement | null>(null)
 let cy: Core | null = null
@@ -111,7 +135,7 @@ const convertToElements = (): ElementDefinition[] => {
     elements.push({
       data: {
         id: node.id,
-        label: node.relation,
+        label: nodeLabel(node.relation),
         relation: node.relation,
         level: node.level,
         attributes: node.attributes,
@@ -132,10 +156,11 @@ const convertToElements = (): ElementDefinition[] => {
         sharedAttrs = parentNode.shared_attributes[node.id]
       }
 
-      // Format label: show all shared attributes
-      const label = sharedAttrs.length > 0
-        ? sharedAttrs.join(', ')
-        : ''
+      // Show just the immediate join key between parent and child
+      // (e.g. "u.id = b.userid") rather than the whole shared equivalence
+      // class. Pick the shared attribute on the parent's relation and the one
+      // on the child's relation; fall back to the full list if not found.
+      const label = immediateJoinLabel(sharedAttrs, parentNode?.relation, node.relation)
 
       elements.push({
         data: {
@@ -170,10 +195,14 @@ const initializeCytoscape = () => {
           'color': '#fff',
           'text-valign': 'center',
           'text-halign': 'center',
-          'font-size': '20px',
+          'font-size': '17px',
           'font-weight': 'bold',
-          'width': '110px',
-          'height': '60px',
+          // Size the card to its label (with padding) so "comments (c)" reads
+          // as a substantial card and the tree uses the horizontal space.
+          'width': 'label',
+          'padding': '16px',
+          'min-width': '90px',
+          'height': '52px',
           'shape': 'roundrectangle',
           'border-width': '2px',
           'border-color': '#2563eb',
@@ -199,15 +228,18 @@ const initializeCytoscape = () => {
           'curve-style': 'bezier',
           'arrow-scale': 1.5,
           'label': 'data(label)',
-          'font-size': '14px',
+          'font-size': '13px',
           'font-weight': 'bold',
-          'text-rotation': 'autorotate',
+          // Horizontal join-condition label in a pill (no autorotate, which
+          // made it vertical/illegible on straight top-down edges).
           'text-background-color': '#ffffff',
           'text-background-opacity': 0.95,
           'text-background-padding': '4px',
           'text-background-shape': 'roundrectangle',
-          'color': '#334155',
-          'text-margin-y': -10
+          'text-border-color': '#cbd5e1',
+          'text-border-width': '1px',
+          'text-border-opacity': 1,
+          'color': '#334155'
         }
       },
       {
@@ -227,7 +259,7 @@ const initializeCytoscape = () => {
       animate: true,
       animationDuration: 500
     },
-    minZoom: 0.3,
+    minZoom: 0.1,
     maxZoom: 3,
     wheelSensitivity: 0.2
   })
@@ -252,15 +284,12 @@ const initializeCytoscape = () => {
 
   cy.on('tap', 'node', (event) => {
     const node = event.target
-    console.log('Selected join tree node:', node.data())
   })
 
-  // Fit to container
-  nextTick(() => {
-    if (cy) {
-      cy.fit(undefined, 50)
-    }
-  })
+  // Fit once the initial layout settles, with generous padding, so the
+  // top/bottom nodes of a tall tree aren't clipped.
+  cy.one('layoutstop', () => fitGraph())
+  nextTick(() => fitGraph())
 }
 
 const applyLayout = () => {
@@ -296,12 +325,22 @@ const applyLayout = () => {
   }
 
   const layout = cy.layout(layoutConfig)
+  // Fit after the layout settles (not during the animation).
+  layout.one('layoutstop', () => fitGraph())
   layout.run()
 }
 
+// Fit with generous padding so top/bottom nodes aren't clipped, then cap the
+// zoom: a small/shallow tree would otherwise zoom in until the nodes are huge
+// (and a 2-node tree fills the panel). We only lower an over-zoom — never
+// raise a low one — so deep trees stay fully visible.
+const FIT_MAX_ZOOM = 1.1
 const fitGraph = () => {
-  if (cy) {
-    cy.fit(undefined, 50)
+  if (!cy) return
+  cy.fit(undefined, 60)
+  if (cy.zoom() > FIT_MAX_ZOOM) {
+    cy.zoom(FIT_MAX_ZOOM)
+    cy.center()
   }
 }
 
@@ -387,8 +426,28 @@ watch(() => props.joinTree, () => {
   })
 }, { deep: true })
 
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   initializeCytoscape()
+  // Re-fit when the container first gets a real size (e.g. when this tab
+  // becomes visible) so a tall tree isn't clipped from a fit computed against
+  // a zero/partial-height container.
+  if (cyContainer.value && typeof ResizeObserver !== 'undefined') {
+    let lastH = 0
+    resizeObserver = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height ?? 0
+      if (h > 50 && Math.abs(h - lastH) > 20) {
+        lastH = h
+        nextTick(() => fitGraph())
+      }
+    })
+    resizeObserver.observe(cyContainer.value)
+  }
+})
+
+onUnmounted(() => {
+  if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null }
 })
 </script>
 
@@ -397,7 +456,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: white;
+  background: var(--color-surface);
+  color: var(--color-text);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   overflow: hidden;
@@ -405,17 +465,17 @@ onMounted(() => {
 
 .viewer-header {
   padding: 1rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #f9fafb;
+  background: var(--color-background-soft);
 }
 
 .viewer-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #1f2937;
+  color: var(--color-text);
 }
 
 .stats {
@@ -427,11 +487,11 @@ onMounted(() => {
 
 .stat {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .stat strong {
-  color: #1f2937;
+  color: var(--color-text);
   font-weight: 600;
 }
 
@@ -459,7 +519,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   padding: 2rem;
 }
 
@@ -470,13 +530,15 @@ onMounted(() => {
 
 .no-tree-message .hint {
   font-size: 0.875rem;
-  color: #9ca3af;
+  color: var(--color-text-secondary);
 }
 
 .cy-container {
   flex: 1;
   min-height: 640px;
-  background: #ffffff;
+  /* Light in both themes — node labels are dark (white text on blue cards is
+     fine, but the canvas backdrop must stay light for contrast). */
+  background: #F9FAFB;
   position: relative;
 }
 
@@ -517,17 +579,17 @@ onMounted(() => {
 }
 
 .text-muted {
-  color: #9ca3af;
+  color: var(--color-text-secondary);
   font-style: italic;
 }
 
 .viewer-controls {
   padding: 1rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--color-border);
   display: flex;
   gap: 1rem;
   align-items: center;
-  background: #f9fafb;
+  background: var(--color-background-soft);
   flex-wrap: wrap;
 }
 
@@ -539,7 +601,7 @@ onMounted(() => {
 
 .layout-selector label {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-weight: 500;
 }
 
@@ -548,7 +610,7 @@ onMounted(() => {
   border: 1px solid #d1d5db;
   border-radius: 4px;
   font-size: 0.875rem;
-  background: white;
+  background: var(--color-surface);
   cursor: pointer;
 }
 
@@ -563,7 +625,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 14px;
-  color: #374151;
+  color: var(--color-text);
   cursor: pointer;
   user-select: none;
 }
@@ -595,7 +657,7 @@ onMounted(() => {
   position: absolute;
   top: calc(100% + 0.5rem);
   right: 0;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid #D1D5DB;
   border-radius: 0.5rem;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -609,21 +671,21 @@ onMounted(() => {
   width: 100%;
   padding: 0.75rem 1rem;
   text-align: left;
-  background: white;
+  background: var(--color-surface);
   border: none;
   cursor: pointer;
   font-size: 0.875rem;
-  color: #1F2937;
+  color: var(--color-text);
   transition: background-color 0.2s;
 }
 
 .export-option:hover {
-  background: #F3F4F6;
+  background: var(--color-background-mute);
   color: #3B82F6;
 }
 
 .export-option:not(:last-child) {
-  border-bottom: 1px solid #E5E7EB;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .btn {
@@ -637,8 +699,8 @@ onMounted(() => {
 }
 
 .btn-secondary {
-  background: #e5e7eb;
-  color: #374151;
+  background: var(--color-border);
+  color: var(--color-text);
 }
 
 .btn-secondary:hover {

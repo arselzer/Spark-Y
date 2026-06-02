@@ -1,5 +1,5 @@
 <template>
-  <div class="hypergraph-viewer">
+  <div class="hypergraph-viewer" ref="viewerRoot">
     <div class="viewer-header">
       <h3>Query Hypergraph</h3>
       <div class="stats">
@@ -22,6 +22,18 @@
           Width: <strong>{{ stats.hypertree_width }}</strong>
         </span>
       </div>
+    </div>
+
+    <!-- Guardedness explainer: why the query is (un)guarded -->
+    <div v-if="stats.guard_label || (stats.uncovered_output_labels && stats.uncovered_output_labels.length)" class="guard-note">
+      <template v-if="stats.guard_label">
+        <span class="guard-swatch"></span>
+        <span><strong>Guard:</strong> <code>{{ stats.guard_label }}</code> covers all output variables — the aggregate can be pushed here, so no large intermediate is built.</span>
+      </template>
+      <template v-else>
+        <span class="uncovered-swatch"></span>
+        <span><strong>Unguarded:</strong> no single relation covers {{ stats.uncovered_output_labels.join(', ') }} — these output variables force materialisation.</span>
+      </template>
     </div>
 
     <div ref="cyContainer" class="cy-container"></div>
@@ -75,6 +87,9 @@
       </div>
       <button @click="resetLayout" class="btn btn-secondary">Reset Layout</button>
       <button @click="fitGraph" class="btn btn-secondary">Fit to View</button>
+      <button @click="toggleFullscreen" class="btn btn-secondary">
+        {{ isFullscreen ? 'Exit Fullscreen' : '⛶ Fullscreen' }}
+      </button>
       <div class="export-dropdown">
         <button @click="toggleExportMenu" class="btn btn-secondary export-btn">
           Export <span class="dropdown-arrow">{{ showExportMenu ? '▲' : '▼' }}</span>
@@ -91,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'
 // @ts-ignore - cytoscape-layers doesn't have proper types
 import cytoscapeLayers from 'cytoscape-layers'
@@ -119,7 +134,29 @@ const props = withDefaults(defineProps<Props>(), {
   gyoSteps: null
 })
 const cyContainer = ref<HTMLElement | null>(null)
+const viewerRoot = ref<HTMLElement | null>(null)
+const isFullscreen = ref(false)
 let cy: Core | null = null
+
+function toggleFullscreen() {
+  const el = viewerRoot.value
+  if (!el) return
+  if (!document.fullscreenElement) {
+    el.requestFullscreen?.().catch(() => {})
+  } else {
+    document.exitFullscreen?.().catch(() => {})
+  }
+}
+
+function onFullscreenChange() {
+  isFullscreen.value = !!document.fullscreenElement
+  // Re-fit after the viewport size change so the graph fills the new area.
+  nextTick(() => { if (cy) setTimeout(() => cy && cy.fit(undefined, 50), 150) })
+}
+
+onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+})
 let bubbleSetsPlugin: any = null
 
 const stats = ref({
@@ -129,7 +166,11 @@ const stats = ref({
   hypertree_width: undefined as number | undefined,
   num_relations: 0,
   num_joins: 0,
-  num_aggregates: 0
+  num_aggregates: 0,
+  is_guarded: undefined as boolean | undefined,
+  guardedness_type: undefined as string | undefined,
+  guard_label: null as string | null,
+  uncovered_output_labels: [] as string[]
 })
 
 const tooltipData = ref<{
@@ -154,16 +195,15 @@ const { currentHighlight, highlightElement, clearHighlight } = useHighlightCoord
 
 onMounted(() => {
   initCytoscape()
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 
   // If visualization data is already present when component mounts, update immediately
   if (props.visualizationData) {
-    console.log('Visualization data already present on mount, updating graph...')
     nextTick(() => {
       updateGraph(props.visualizationData!)
 
       // Apply GYO styling if GYO step is already set
       if (props.gyoStep !== null && props.gyoSteps && props.gyoSteps.length > 0) {
-        console.log('Applying initial GYO styling for step', props.gyoStep)
         applyGYOStyling()
       }
     })
@@ -171,7 +211,6 @@ onMounted(() => {
 })
 
 watch(() => props.visualizationData, (newData) => {
-  console.log('Watcher triggered, newData:', newData)
   if (newData) {
     updateGraph(newData)
   }
@@ -210,7 +249,6 @@ watch(currentHighlight, (highlight) => {
       return normalized.toLowerCase()
     })
 
-    console.log(`Hypergraph: Highlighting nodes containing any of:`, normalizedAttributes)
 
     // First try direct ID match
     cy.$(`node[id="${highlight.id}"]`).addClass('sql-highlighted')
@@ -264,7 +302,6 @@ watch(currentHighlight, (highlight) => {
       }
     })
 
-    console.log(`Searched ${totalNodesChecked} nodes, matched: ${matchedNode ? 'yes' : 'no'}`)
 
     // If highlight came from SQL (no attributes) and we found a matching node,
     // enrich it with the full equivalence class so SQL can highlight all attributes
@@ -291,7 +328,6 @@ watch(currentHighlight, (highlight) => {
       })
 
       if (attributesArray.length > 0) {
-        console.log(`Enriching highlight with equivalence class (${attributesArray.length} attributes):`, attributesArray)
         // Update the highlight with full attributes array
         // Preserve hoveredAttribute if it exists (came from SQL hover)
         highlightElement({
@@ -302,7 +338,6 @@ watch(currentHighlight, (highlight) => {
           hoveredAttribute: highlight.hoveredAttribute  // Preserve the original hovered attribute
         })
       } else {
-        console.warn(`Node found but has no attributes array:`, nodeData)
       }
     }
   }
@@ -314,7 +349,6 @@ function initCytoscape() {
     return
   }
 
-  console.log('Initializing Cytoscape...')
 
   cy = cytoscape({
     container: cyContainer.value,
@@ -327,7 +361,7 @@ function initCytoscape() {
           'color': '#1F2937',
           'text-valign': 'center',
           'text-halign': 'center',
-          'font-size': '12px',
+          'font-size': '14px',
           'font-weight': '600',
           'text-outline-color': '#FFFFFF',
           'text-outline-width': 2,
@@ -409,7 +443,7 @@ function initCytoscape() {
           'text-outline-color': '#FFFFFF',
           'text-outline-width': 2,
           'font-weight': 'bold',
-          'font-size': '11px',
+          'font-size': '13px',
           'text-valign': 'center',
           'text-halign': 'center'
         }
@@ -434,6 +468,28 @@ function initCytoscape() {
         }
       },
       {
+        // Guard relation: the single relation that covers all output variables
+        // (why the query is "guarded"). Gold halo so it stands out.
+        selector: 'node.guard',
+        style: {
+          'border-width': '6px',
+          'border-color': '#F59E0B',
+          'background-color': '#B45309',
+          'width': '56px',
+          'height': '56px'
+        }
+      },
+      {
+        // Output variable no relation covers (why a query is "unguarded").
+        selector: 'node.uncovered',
+        style: {
+          'border-width': '5px',
+          'border-color': '#EF4444',
+          'border-style': 'double',
+          'background-color': '#EF4444'
+        }
+      },
+      {
         selector: 'edge',
         style: {
           'width': 2,
@@ -447,7 +503,7 @@ function initCytoscape() {
         selector: 'edge[label]',
         style: {
           'label': 'data(label)',
-          'font-size': '10px',
+          'font-size': '12px',
           'text-rotation': 'autorotate',
           'text-margin-y': -10
         }
@@ -563,13 +619,16 @@ function initCytoscape() {
       name: 'cose',
       animate: true,
       animationDuration: 500
-    }
+    },
+    // Cap zoom so a small hypergraph (few nodes) doesn't render with huge
+    // nodes filling the panel after fit-to-view.
+    maxZoom: 1.4,
+    minZoom: 0.1
   })
 
   // Add interaction handlers
   cy.on('tap', 'node', (evt) => {
     const node = evt.target
-    console.log('Selected node:', node.data())
   })
 
   // Helper function to parse and show tooltip
@@ -625,7 +684,6 @@ function initCytoscape() {
         attributesArray = data.attributes.split(',').map(s => s.trim()).filter(Boolean)
       }
 
-      console.log(`Hypergraph node hover: id="${data.id}", label="${data.label}", type="${data.type}"`)
       highlightElement({
         type: 'node',
         id: data.id,
@@ -648,7 +706,6 @@ function initCytoscape() {
     // Highlight this edge in SQL
     const data = element.data()
     if (data.label) {
-      console.log(`Hypergraph edge hover: id="${data.id}", label="${data.label}"`)
       highlightElement({
         type: 'edge',
         id: data.id,
@@ -679,7 +736,6 @@ function initCytoscape() {
         attributesArray = data.attributes.split(',').map(s => s.trim()).filter(Boolean)
       }
 
-      console.log(`Hypergraph hyperedge node hover: id="${data.id}", label="${data.label}", attributes count: ${attributesArray.length}`)
       highlightElement({
         type: 'edge',
         id: data.id,
@@ -701,8 +757,6 @@ function updateGraph(data: VisualizationData) {
     return
   }
 
-  console.log('Updating graph with data:', data)
-  console.log('Elements to add:', data.elements)
 
   // Reset auto layout counter when new data is loaded
   autoResetCount.value = 0
@@ -715,13 +769,11 @@ function updateGraph(data: VisualizationData) {
 
   // Validate and add new elements
   if (!data.elements || data.elements.length === 0) {
-    console.warn('No elements to add to graph')
     return
   }
 
   try {
     cy.add(data.elements)
-    console.log(`Added ${data.elements.length} elements to Cytoscape`)
   } catch (err) {
     console.error('Error adding elements to Cytoscape:', err)
     return
@@ -737,7 +789,6 @@ function updateGraph(data: VisualizationData) {
 
   // Apply layout - choose based on graph properties and user selection
   const layoutName = getOptimalLayoutName()
-  console.log(`Applying ${layoutName} layout`)
 
   let layoutOptions: any = {
     name: layoutName,
@@ -800,7 +851,6 @@ function updateGraph(data: VisualizationData) {
 
   // Use layout stop event for better timing
   layout.one('layoutstop', () => {
-    console.log('Layout stopped, applying post-layout actions')
 
     if (cy) {
       cy.fit(undefined, 50)
@@ -809,18 +859,15 @@ function updateGraph(data: VisualizationData) {
       if (props.showConvexHulls) {
         // Add a delay to ensure rendering is complete
         setTimeout(() => {
-          console.log('Applying convex hulls after layout stop')
           applyConvexHulls()
         }, 300)
       }
 
-      console.log('Graph layout complete and fitted to view')
 
       // Automatically trigger reset layout 1-2 times for better initial appearance
       // This mimics the user pressing "Reset Layout" button to avoid crossing edges
       if (autoResetCount.value < 2) {
         autoResetCount.value++
-        console.log(`Auto-triggering reset layout (attempt ${autoResetCount.value}/2)`)
         setTimeout(() => {
           resetLayout()
         }, 800) // Wait for convex hulls to finish (300ms) + buffer
@@ -1027,7 +1074,6 @@ const bubbleBorderColors = [
 function applyBubbleSets() {
   if (!cy) return
 
-  console.log('Applying bubble sets visualization')
 
   // Map all hyperedge nodes to colors (all hyperedges are now nodes)
   const hyperedgeColors = new Map<string, { bg: string, border: string }>()
@@ -1179,7 +1225,6 @@ function applyConvexHulls() {
   if (!cy) return
 
   const timestamp = Date.now()
-  console.log(`[${timestamp}] === applyConvexHulls START ===`)
 
   // Remove existing bubble sets if any
   removeConvexHulls()
@@ -1187,13 +1232,11 @@ function applyConvexHulls() {
   // Initialize the bubble sets plugin
   try {
     bubbleSetsPlugin = cy.bubbleSets()
-    console.log('Bubble sets plugin initialized:', bubbleSetsPlugin)
 
     // Check if the layer was created
     if (cy.container()) {
       const container = cy.container()
       const svgLayers = container.querySelectorAll('svg')
-      console.log(`Found ${svgLayers.length} SVG layers in container`)
       svgLayers.forEach((svg, idx) => {
         console.log(`SVG layer ${idx}:`, {
           class: svg.getAttribute('class'),
@@ -1209,7 +1252,6 @@ function applyConvexHulls() {
 
   // Get all hyperedge nodes (all hyperedges are now nodes, including 2-vertex and isolated ones)
   const hyperedgeNodes = cy.nodes('.hyperedge')
-  console.log(`Found ${hyperedgeNodes.length} hyperedge nodes`)
 
   // No more simple edges - all hyperedges are now nodes
   const twoVertexEdges = cy.collection()  // Empty collection for backward compatibility
@@ -1226,7 +1268,6 @@ function applyConvexHulls() {
     // Filter out hidden nodes (e.g., singletons that are hidden)
     const visibleNodes = connectedNodes.filter(node => node.style('display') !== 'none')
 
-    console.log(`Hyperedge ${idx}: ${connectedNodes.length} connected nodes, ${visibleNodes.length} visible`)
 
     // Bubble sets require at least 2 nodes to create a meaningful hull
     // With just the hyperedge node itself (1 node), it can't draw a hull
@@ -1241,20 +1282,17 @@ function applyConvexHulls() {
       // Include the hyperedge node itself
       const nodesToInclude = visibleNodes.union(hyperedgeNode)
 
-      console.log(`Creating bubble set for hyperedge ${idx} with ${nodesToInclude.length} nodes (${visibleNodes.length} attributes + 1 hyperedge), color: ${color}`)
 
       // Check if nodes have valid positions
       let allNodesHavePositions = true
       nodesToInclude.forEach(node => {
         const pos = node.position()
         if (!pos || (pos.x === 0 && pos.y === 0)) {
-          console.warn(`Node ${node.id()} has invalid position:`, pos)
           allNodesHavePositions = false
         }
       })
 
       if (!allNodesHavePositions) {
-        console.warn(`Skipping hyperedge ${idx}: some nodes don't have valid positions yet`)
         failCount++
       } else {
         try {
@@ -1273,10 +1311,8 @@ function applyConvexHulls() {
 
           if (path) {
             successCount++
-            console.log(`Successfully created bubble set ${idx}`)
           } else {
             failCount++
-            console.warn(`Failed to create bubble set ${idx}: addPath returned null/undefined`)
           }
         } catch (err) {
           failCount++
@@ -1284,7 +1320,6 @@ function applyConvexHulls() {
         }
       }
     } else {
-      console.log(`Skipping hyperedge ${idx}: no visible connected nodes (needs at least 1 attribute node)`)
     }
   })
 
@@ -1296,7 +1331,6 @@ function applyConvexHulls() {
 
     // Check if both nodes are visible
     if (sourceNode.style('display') === 'none' || targetNode.style('display') === 'none') {
-      console.log(`Skipping 2-vertex edge ${idx}: one or both nodes are hidden`)
       return
     }
 
@@ -1309,20 +1343,17 @@ function applyConvexHulls() {
     // Create collection of nodes to include in bubble set
     const nodesToInclude = cy.collection([sourceNode, targetNode])
 
-    console.log(`Creating bubble set for 2-vertex edge ${idx} (${edge.id()}) connecting ${sourceNode.id()} and ${targetNode.id()}, color: ${color}`)
 
     // Check if nodes have valid positions
     let allNodesHavePositions = true
     nodesToInclude.forEach(node => {
       const pos = node.position()
       if (!pos || (pos.x === 0 && pos.y === 0)) {
-        console.warn(`Node ${node.id()} has invalid position:`, pos)
         allNodesHavePositions = false
       }
     })
 
     if (!allNodesHavePositions) {
-      console.warn(`Skipping 2-vertex edge ${idx}: some nodes don't have valid positions yet`)
       failCount++
     } else {
       try {
@@ -1341,10 +1372,8 @@ function applyConvexHulls() {
 
         if (path) {
           successCount++
-          console.log(`Successfully created bubble set for 2-vertex edge ${idx}`)
         } else {
           failCount++
-          console.warn(`Failed to create bubble set for 2-vertex edge ${idx}: addPath returned null/undefined`)
         }
       } catch (err) {
         failCount++
@@ -1354,21 +1383,15 @@ function applyConvexHulls() {
   })
 
   const createTimestamp = Date.now()
-  console.log(`[${createTimestamp}] Convex hulls applied: ${successCount} successful, ${failCount} failed (${hyperedgeNodes.length} hyperedges + ${twoVertexEdges.length} 2-vertex edges)`)
-  console.log(`[${createTimestamp}] === applyConvexHulls END ===`)
 }
 
 // Remove convex hulls
 function removeConvexHulls() {
   const timestamp = Date.now()
-  console.log(`[${timestamp}] removeConvexHulls called`)
-  console.log('removeConvexHulls stack trace:', new Error().stack)
 
   if (bubbleSetsPlugin) {
-    console.log(`[${timestamp}] Removing convex hulls`)
     // Remove all paths
     const paths = bubbleSetsPlugin.getPaths()
-    console.log(`[${timestamp}] Removing ${paths.length} paths`)
     paths.forEach((path: any) => {
       bubbleSetsPlugin.removePath(path)
     })
@@ -1376,12 +1399,10 @@ function removeConvexHulls() {
     // Destroy the plugin instance to clean up the layer
     if (bubbleSetsPlugin.destroy) {
       bubbleSetsPlugin.destroy()
-      console.log(`[${timestamp}] Bubble sets plugin destroyed`)
     }
 
     bubbleSetsPlugin = null
   } else {
-    console.log(`[${timestamp}] removeConvexHulls called but bubbleSetsPlugin is null`)
   }
 
   // Manually clean up any leftover SVG layers
@@ -1389,19 +1410,16 @@ function removeConvexHulls() {
     const container = cy.container()
     // Find all SVG layers that are NOT the main Cytoscape canvas
     const svgLayers = container.querySelectorAll('svg')
-    console.log(`Found ${svgLayers.length} SVG layers before cleanup`)
 
     svgLayers.forEach((svg, idx) => {
       // The first SVG is usually the main Cytoscape canvas with lots of children
       // Additional SVGs with few children are likely bubble sets layers
       if (idx > 0) {
-        console.log(`Removing extra SVG layer ${idx}`)
         svg.remove()
       }
     })
 
     const remainingSvgs = container.querySelectorAll('svg')
-    console.log(`${remainingSvgs.length} SVG layers remaining after cleanup`)
   }
 }
 
@@ -1429,14 +1447,11 @@ watch(() => props.showBubbleSets, (newVal) => {
 
 // Watch for convex hulls toggle
 watch(() => props.showConvexHulls, (newVal, oldVal) => {
-  console.log(`showConvexHulls watcher triggered: ${oldVal} -> ${newVal}`)
   if (!cy) return
 
   if (newVal) {
-    console.log('Watcher calling applyConvexHulls()')
     applyConvexHulls()
   } else {
-    console.log('Watcher calling removeConvexHulls()')
     removeConvexHulls()
   }
 })
@@ -1444,7 +1459,6 @@ watch(() => props.showConvexHulls, (newVal, oldVal) => {
 function toggleSingletons() {
   if (!cy) return
 
-  console.log('Toggling singleton nodes:', hideSingletons.value)
 
   // Find singleton attribute nodes (nodes with only one attribute)
   // Include .attribute, .output_attribute, and .schema_attribute nodes
@@ -1495,7 +1509,6 @@ function toggleSingletons() {
 function toggleSchemaAttributes() {
   if (!cy) return
 
-  console.log('Toggling schema attributes:', showSchemaAttributes.value)
 
   // Find schema_attribute nodes
   const schemaNodes = cy.nodes('.schema_attribute')
@@ -1529,7 +1542,6 @@ function getOptimalLayoutName(): string {
   }
 
   // Always use force-directed for auto mode
-  console.log('Using cose layout (force-directed)')
   return 'cose'
 }
 
@@ -1537,7 +1549,6 @@ function applySelectedLayout() {
   if (!cy) return
 
   const layoutName = getOptimalLayoutName()
-  console.log(`Applying ${layoutName} layout`)
 
   let layoutOptions: any = {
     name: layoutName,
@@ -1596,10 +1607,8 @@ function applySelectedLayout() {
 
   // Add layoutstop handler for convex hulls reapplication
   layout.one('layoutstop', () => {
-    console.log('applySelectedLayout: Layout stopped')
     if (props.showConvexHulls && cy) {
       setTimeout(() => {
-        console.log('applySelectedLayout: Applying convex hulls after layout stop')
         applyConvexHulls()
       }, 300)
     }
@@ -1638,10 +1647,8 @@ function resetLayout() {
 
   // Add layoutstop handler for convex hulls and GYO styling reapplication
   layout.one('layoutstop', () => {
-    console.log('resetLayout: Layout stopped')
     if (props.showConvexHulls && cy) {
       setTimeout(() => {
-        console.log('resetLayout: Applying convex hulls after layout stop')
         applyConvexHulls()
       }, 300)
     }
@@ -1649,7 +1656,6 @@ function resetLayout() {
     // Reapply GYO styling if we're viewing a GYO step
     if (props.gyoStep !== null && props.gyoSteps && props.gyoSteps.length > 0) {
       setTimeout(() => {
-        console.log('resetLayout: Reapplying GYO styling for step', props.gyoStep)
         applyGYOStyling()
       }, 350)
     }
@@ -1727,11 +1733,19 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 1200px;
-  background: white;
+  height: clamp(440px, 72vh, 880px);
+  background: var(--color-surface);
+  color: var(--color-text);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Fill the screen when opened fullscreen via the Fullscreen API. */
+.hypergraph-viewer:fullscreen {
+  height: 100vh;
+  width: 100vw;
+  border-radius: 0;
 }
 
 .viewer-header {
@@ -1759,8 +1773,47 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   color: var(--color-text-secondary);
 }
 
+.guard-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+}
+
+.guard-note code {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.guard-swatch, .uncovered-swatch {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.guard-swatch {
+  background: #B45309;
+  border: 3px solid #F59E0B;
+  box-sizing: border-box;
+}
+
+.uncovered-swatch {
+  background: #EF4444;
+  border: 2px double #fff;
+  box-sizing: border-box;
+}
+
 .cy-container {
   flex: 1;
+  /* Keep the canvas light in BOTH themes — cytoscape node labels are dark with
+     a white outline, so a dark canvas would make them unreadable. The
+     surrounding chrome adapts via --color-surface. */
   background: #F9FAFB;
 }
 
@@ -1789,12 +1842,12 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
 
 .toggle-control span {
   font-size: 0.875rem;
-  color: #4B5563;
+  color: var(--color-text-secondary);
   font-weight: 500;
 }
 
 .toggle-control:hover span {
-  color: #1F2937;
+  color: var(--color-text);
 }
 
 .layout-selector {
@@ -1805,7 +1858,7 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
 
 .layout-selector label {
   font-size: 0.875rem;
-  color: #4B5563;
+  color: var(--color-text-secondary);
   font-weight: 500;
 }
 
@@ -1813,9 +1866,9 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   padding: 0.375rem 0.75rem;
   border: 1px solid #D1D5DB;
   border-radius: 0.375rem;
-  background: white;
+  background: var(--color-surface);
   font-size: 0.875rem;
-  color: #1F2937;
+  color: var(--color-text);
   cursor: pointer;
   transition: border-color 0.2s;
 }
@@ -1851,7 +1904,7 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   position: absolute;
   top: calc(100% + 0.5rem);
   right: 0;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid #D1D5DB;
   border-radius: 0.5rem;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -1865,26 +1918,26 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   width: 100%;
   padding: 0.75rem 1rem;
   text-align: left;
-  background: white;
+  background: var(--color-surface);
   border: none;
   cursor: pointer;
   font-size: 0.875rem;
-  color: #1F2937;
+  color: var(--color-text);
   transition: background-color 0.2s;
 }
 
 .export-option:hover {
-  background: #F3F4F6;
+  background: var(--color-background-mute);
   color: #3B82F6;
 }
 
 .export-option:not(:last-child) {
-  border-bottom: 1px solid #E5E7EB;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .node-tooltip {
   position: absolute;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid #cbd5e0;
   border-radius: 0.375rem;
   padding: 0.75rem;
@@ -1898,18 +1951,18 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
   font-weight: 600;
   font-size: 0.875rem;
   margin-bottom: 0.5rem;
-  color: #1f2937;
-  border-bottom: 1px solid #e5e7eb;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 0.25rem;
 }
 
 .tooltip-content {
   font-size: 0.813rem;
-  color: #4b5563;
+  color: var(--color-text-secondary);
 }
 
 .tooltip-content strong {
-  color: #1f2937;
+  color: var(--color-text);
 }
 
 .tooltip-content ul {
@@ -1946,7 +1999,7 @@ function exportImage(format: 'png' | 'svg' | 'jpg' = 'png', scale: number = 2) {
 .gyo-tooltip-section {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--color-border);
 }
 
 .gyo-tooltip-text {

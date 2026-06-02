@@ -14,7 +14,11 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://backend:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        // Match nginx: /execution/execute can run for ~3 min when the
+        // reference query exhausts its 90s budget before the optimised run.
+        timeout: 300000,
+        proxyTimeout: 300000
       },
       '/ws': {
         target: 'ws://backend:8000',

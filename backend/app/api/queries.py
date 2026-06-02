@@ -4,6 +4,8 @@ API routes for query management and browsing
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 import logging
+import os
+import re
 from pathlib import Path
 import json
 
@@ -32,83 +34,101 @@ def load_queries(force_reload: bool = False) -> List[QueryMetadata]:
 
     queries = []
 
-    # Load JOB queries (moved out of submodule with movie_info_idx -> movie_info rewrite)
-    job_dir = Path("/app/data/job")
-    if job_dir.exists():
-        queries.extend(_load_job_queries(job_dir))
-    else:
-        logger.warning(f"JOB queries directory not found: {job_dir}")
-
-    # Load TPC-H queries (if available)
-    tpch_dir = Path("/app/spark-eval-groupagg/benchmark/tpch")
-    if tpch_dir.exists():
-        queries.extend(_load_tpch_queries(tpch_dir))
+    for spec in BENCHMARK_SOURCES:
+        directory = Path(spec["path"])
+        if not directory.exists():
+            logger.info(f"Benchmark directory not found, skipping: {directory}")
+            continue
+        queries.extend(_load_benchmark_dir(directory, spec))
 
     _query_cache = queries
-    logger.info(f"Loaded {len(queries)} queries")
+    logger.info(f"Loaded {len(queries)} queries across {len({q.category for q in queries})} categories")
     return queries
 
 
-def _load_job_queries(job_dir: Path) -> List[QueryMetadata]:
-    """Load JOB benchmark queries"""
-    queries = []
+# Per-benchmark catalog config. Each entry locates SQL files on disk and
+# describes how to surface them in the UI. The default base path is the Docker
+# mount point /app/data; override with the SPARK_Y_DATA_DIR env var for local
+# development outside the container.
+_DATA_ROOT = Path(os.environ.get("SPARK_Y_DATA_DIR", "/app/data"))
 
-    # Look for .sql files
-    for sql_file in job_dir.glob("*.sql"):
+BENCHMARK_SOURCES = [
+    {
+        "category": QueryCategory.JOB,
+        "path": str(_DATA_ROOT / "job"),
+        "id_prefix": "job",
+        "display_prefix": "JOB",
+    },
+    {
+        "category": QueryCategory.TPCH,
+        "path": str(_DATA_ROOT / "tpch"),
+        "id_prefix": "tpch",
+        "display_prefix": "TPC-H",
+    },
+    {
+        "category": QueryCategory.STATS_CEB,
+        "path": str(_DATA_ROOT / "stats-ceb"),
+        "id_prefix": "stats",
+        "display_prefix": "STATS-CEB",
+    },
+    {
+        "category": QueryCategory.SNAP,
+        "path": str(_DATA_ROOT / "snap"),
+        "id_prefix": "snap",
+        "display_prefix": "SNAP",
+    },
+]
+
+
+def _format_sql(sql: str) -> str:
+    """Pretty-print a one-line benchmark query onto multiple lines.
+
+    Many benchmark queries (notably STATS-CEB) are stored as a single long
+    line, which overflows the editor and the read-only SQL display. Reflow at
+    clause / boolean boundaries. The reflow only touches text outside
+    single-quoted literals, so timestamp/string values are never split.
+    """
+    if not sql or "\n" in sql.strip():
+        return sql  # already multi-line or empty — leave as-is
+
+    def reflow(seg: str) -> str:
+        seg = re.sub(r"\s+", " ", seg)
+        seg = re.sub(r"\bSELECT\b", "\nSELECT\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bFROM\b", "\nFROM\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bWHERE\b", "\nWHERE\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\b(INNER|LEFT|RIGHT|FULL|CROSS)?\s*JOIN\b", r"\n\1 JOIN\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bAND\b", "\n  AND ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bGROUP BY\b", "\nGROUP BY\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bHAVING\b", "\nHAVING\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bORDER BY\b", "\nORDER BY\n  ", seg, flags=re.IGNORECASE)
+        seg = re.sub(r"\bLIMIT\b", "\nLIMIT ", seg, flags=re.IGNORECASE)
+        return seg
+
+    # Odd-indexed segments are single-quoted literals — pass them through.
+    parts = re.split(r"('(?:[^']|'')*')", sql)
+    out = "".join(seg if i % 2 == 1 else reflow(seg) for i, seg in enumerate(parts))
+    return out.strip()
+
+
+def _load_benchmark_dir(directory: Path, spec: dict) -> List[QueryMetadata]:
+    """Load every .sql file in `directory` under the given benchmark spec."""
+    queries: List[QueryMetadata] = []
+    for sql_file in sorted(directory.glob("*.sql")):
         try:
-            sql_content = sql_file.read_text()
-
-            # Parse query metadata from filename and content
+            sql_content = _format_sql(sql_file.read_text().strip())
             query_id = sql_file.stem
-            name = query_id.replace("_", " ").title()
-
-            # Extract table names (simple parsing)
             tables = _extract_table_names(sql_content)
-
-            # Count joins and aggregates
-            num_joins = _count_joins(sql_content, tables)
-            num_aggregates = _count_aggregates(sql_content)
-
             queries.append(QueryMetadata(
-                query_id=f"job_{query_id}",
-                name=f"JOB {name}",
-                category=QueryCategory.JOB,
+                query_id=f"{spec['id_prefix']}_{query_id}",
+                name=f"{spec['display_prefix']} {query_id}",
+                category=spec["category"],
                 sql=sql_content,
                 tables=tables,
-                num_joins=num_joins,
-                num_aggregates=num_aggregates
+                num_joins=_count_joins(sql_content, tables),
+                num_aggregates=_count_aggregates(sql_content),
             ))
         except Exception as e:
             logger.warning(f"Could not load query {sql_file}: {e}")
-
-    return queries
-
-
-def _load_tpch_queries(tpch_dir: Path) -> List[QueryMetadata]:
-    """Load TPC-H benchmark queries"""
-    queries = []
-
-    for sql_file in tpch_dir.glob("*.sql"):
-        try:
-            sql_content = sql_file.read_text()
-            query_id = sql_file.stem
-
-            tables = _extract_table_names(sql_content)
-            num_joins = _count_joins(sql_content, tables)
-            num_aggregates = _count_aggregates(sql_content)
-
-            queries.append(QueryMetadata(
-                query_id=f"tpch_{query_id}",
-                name=f"TPC-H {query_id}",
-                category=QueryCategory.TPCH,
-                sql=sql_content,
-                tables=tables,
-                num_joins=num_joins,
-                num_aggregates=num_aggregates
-            ))
-        except Exception as e:
-            logger.warning(f"Could not load query {sql_file}: {e}")
-
     return queries
 
 

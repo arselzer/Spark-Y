@@ -39,6 +39,7 @@ const extensions = shallowRef([
   sql({ dialect: PostgreSQL }),
   oneDark,
   EditorView.editable.of(false), // Make it read-only
+  EditorView.lineWrapping,       // wrap long lines instead of overflowing
   ...highlightingExtensions.value
 ])
 </script>

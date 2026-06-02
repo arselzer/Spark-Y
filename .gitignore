@@ -38,9 +38,9 @@ dist/
 *.swo
 
 # Data
-data/tpch/
-# data/job/ is now committed (queries with movie_info_idx -> movie_info rewrite)
-# Keep SQL dumps directory structure but ignore actual dump files
+# data/job/, data/tpch/, data/stats-ceb/, data/snap/, data/schemas/ are all
+# committed: small SQL benchmark assets needed for the SIGMOD demo.
+# Large generated dumps stay out of the repo.
 data/sql-dumps/*.sql
 *.parquet
 *.csv
@@ -52,3 +52,17 @@ data/sql-dumps/*.sql
 
 # Docker
 *.pid
+
+# Runtime saved demo runs
+data/saved-runs/
+
+# Large SNAP graph dumps generated on demand by scripts/fetch_snap_graphs.py
+# (DBLP stays bundled; Google/Patents/Wiki are fetched locally to avoid repo bloat)
+data/sql-dumps/snap_google.sql.gz
+data/sql-dumps/snap_patents.sql.gz
+data/sql-dumps/snap_wiki.sql.gz
+
+# Claude Code harness state
+.claude/
+data/parquet/
+data/saved-batches/

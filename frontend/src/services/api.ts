@@ -7,7 +7,12 @@ import type {
   ExecutionResult,
   Hypergraph,
   VisualizationData,
-  QueryPlanResponse
+  QueryPlanResponse,
+  SavedRun,
+  SavedRunSummary,
+  SavedBatch,
+  SavedBatchSummary,
+  SavedBatchItem
 } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
@@ -94,6 +99,103 @@ export const executionApi = {
   createExecutionStream(executionId: string): WebSocket {
     const wsUrl = `${API_BASE_URL.replace('http', 'ws')}/execution/stream/${executionId}`
     return new WebSocket(wsUrl)
+  },
+
+  /**
+   * Save an execution result for later instant replay.
+   */
+  async saveRun(result: ExecutionResult, name?: string): Promise<SavedRunSummary> {
+    const response = await api.post('/execution/runs', { name, result })
+    return response.data
+  },
+
+  /**
+   * List saved runs (newest first).
+   */
+  async listSavedRuns(): Promise<SavedRunSummary[]> {
+    const response = await api.get('/execution/runs')
+    return response.data
+  },
+
+  /**
+   * Load a full saved run for replay.
+   */
+  async getSavedRun(id: string): Promise<SavedRun> {
+    const response = await api.get(`/execution/runs/${id}`)
+    return response.data
+  },
+
+  /**
+   * Delete a saved run.
+   */
+  async deleteSavedRun(id: string): Promise<void> {
+    await api.delete(`/execution/runs/${id}`)
+  },
+
+  /**
+   * Persist a batch run (a set of query results) for later viewing.
+   */
+  async saveBatch(items: SavedBatchItem[], name?: string): Promise<SavedBatchSummary> {
+    const response = await api.post('/execution/batches', { name, items })
+    return response.data
+  },
+
+  /**
+   * List saved batches (newest first).
+   */
+  async listSavedBatches(): Promise<SavedBatchSummary[]> {
+    const response = await api.get('/execution/batches')
+    return response.data
+  },
+
+  /**
+   * Load a full saved batch for viewing.
+   */
+  async getSavedBatch(id: string): Promise<SavedBatch> {
+    const response = await api.get(`/execution/batches/${id}`)
+    return response.data
+  },
+
+  /**
+   * Delete a saved batch.
+   */
+  async deleteSavedBatch(id: string): Promise<void> {
+    await api.delete(`/execution/batches/${id}`)
+  }
+}
+
+// Data import / Parquet materialisation API
+export const dataImportApi = {
+  /**
+   * One-time: read all tables from a Postgres database and write them to
+   * Parquet on the data volume (slow). Use loadParquet afterwards for fast,
+   * Postgres-free loads.
+   */
+  async materializeParquet(config: {
+    host?: string
+    port?: number
+    database: string
+    username?: string
+    password?: string
+  }): Promise<{ success: boolean; message: string; tables_imported: string[]; errors: string[] }> {
+    const response = await api.post('/data-import/parquet/materialize', config)
+    return response.data
+  },
+
+  /**
+   * Fast: register a materialised Parquet dataset as Spark temp views.
+   */
+  async loadParquet(database: string): Promise<{ success: boolean; message: string; tables_imported: string[] }> {
+    const response = await api.post('/data-import/parquet/load', null, { params: { database } })
+    return response.data
+  },
+
+  /**
+   * List materialised Parquet datasets available on disk.
+   */
+  async listParquetDatasets(): Promise<{ datasets: { database: string; table_count: number; tables: string[] }[] }> {
+    const response = await api.get('/data-import/parquet/datasets')
+    return response.data
   }
 }
 

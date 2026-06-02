@@ -455,7 +455,7 @@ onMounted(() => {
 
 /* Config Sections */
 .config-section {
-  background: white;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 1.5rem;
@@ -482,8 +482,8 @@ onMounted(() => {
 }
 
 .badge-reference {
-  background: #F3F4F6;
-  color: #374151;
+  background: var(--color-background-mute);
+  color: var(--color-text);
 }
 
 .badge-optimized {
@@ -507,8 +507,8 @@ onMounted(() => {
 
 .config-item {
   padding: 1rem;
-  background: #F9FAFB;
-  border: 1px solid #E5E7EB;
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
 }
 
@@ -656,7 +656,7 @@ onMounted(() => {
 
 /* Help Section */
 .help-section {
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 1.5rem;
@@ -679,7 +679,7 @@ onMounted(() => {
   color: var(--color-text);
   margin-bottom: 0.5rem;
   font-family: 'Courier New', monospace;
-  background: #E5E7EB;
+  background: var(--color-border);
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   display: inline-block;
@@ -692,7 +692,7 @@ onMounted(() => {
 }
 
 .help-item code {
-  background: #E5E7EB;
+  background: var(--color-border);
   padding: 0.125rem 0.375rem;
   border-radius: 3px;
   font-family: 'Courier New', monospace;

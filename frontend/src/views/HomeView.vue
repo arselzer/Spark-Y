@@ -67,22 +67,20 @@
 
       <div class="benchmarks-info card">
         <h2>Available Benchmarks</h2>
+        <p class="benchmarks-intro">
+          Queries are packaged with the demo; data dumps live under <code>data/sql-dumps</code>
+          and per-benchmark schemas under <code>data/schemas</code>.
+        </p>
         <div class="benchmark-list">
-          <div class="benchmark-item">
-            <h3>JOB (Join Order Benchmark)</h3>
-            <p>
-              Complex join queries on the IMDB dataset with multiple tables and aggregates.
-            </p>
+          <div v-for="b in shownBenchmarks" :key="b.label" class="benchmark-item">
+            <div class="benchmark-item-header">
+              <span :class="['badge', b.info.badgeClass]">{{ b.info.label }}</span>
+              <span class="benchmark-count">{{ b.count }} {{ b.count === 1 ? 'query' : 'queries' }}</span>
+            </div>
+            <h3>{{ b.info.fullName }}</h3>
+            <p>{{ b.info.description }}</p>
+            <p class="benchmark-table-note" v-if="b.info.tableNote">{{ b.info.tableNote }}</p>
           </div>
-          <!--
-          <div class="benchmark-item">
-            <h3>TPC-H</h3>
-            <p>
-              Standard decision support benchmark with business-oriented queries
-              involving joins and aggregations.
-            </p>
-          </div>
-          -->
         </div>
       </div>
     </div>
@@ -90,7 +88,34 @@
 </template>
 
 <script setup lang="ts">
-// No script needed for static home page
+import { ref, computed, onMounted } from 'vue'
+import { queryApi } from '@/services/api'
+import { benchmarkInfo } from '@/types/benchmarks'
+import type { QueryCategory } from '@/types'
+
+const categories = ref<Record<string, { count: number; name: string }>>({})
+
+onMounted(async () => {
+  try {
+    categories.value = await queryApi.getCategories()
+  } catch (err) {
+    // Benchmarks section degrades gracefully if the API is unreachable.
+    console.error('Failed to load category counts', err)
+  }
+})
+
+const shownBenchmarks = computed(() => {
+  // Show benchmarks that have at least one loaded query, in a fixed order
+  // so the home page reads consistently between renders.
+  const order: QueryCategory[] = ['job', 'tpch', 'stats-ceb', 'snap', 'tpcds']
+  return order
+    .filter((cat) => (categories.value[cat]?.count ?? 0) > 0)
+    .map((cat) => ({
+      info: benchmarkInfo(cat),
+      count: categories.value[cat].count,
+      label: cat,
+    }))
+})
 </script>
 
 <style scoped>
@@ -132,7 +157,7 @@
 }
 
 .feature-card {
-  background: white;
+  background: var(--color-surface);
   padding: 2rem;
   border-radius: 0.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -177,9 +202,41 @@
   margin-top: 1.5rem;
 }
 
+.benchmarks-intro {
+  margin-bottom: 1.5rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.benchmarks-intro code {
+  background: var(--color-bg-secondary, #f3f4f6);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
+
 .benchmark-list {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.5rem;
+}
+
+.benchmark-item {
+  background: var(--color-bg-secondary, #f9fafb);
+  padding: 1.25rem;
+  border-radius: 0.5rem;
+}
+
+.benchmark-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.benchmark-count {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
 }
 
 .benchmark-item h3 {
@@ -191,5 +248,11 @@
 .benchmark-item p {
   color: var(--color-text-secondary);
   line-height: 1.6;
+}
+
+.benchmark-table-note {
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+  opacity: 0.85;
 }
 </style>

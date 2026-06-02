@@ -15,7 +15,12 @@
           <h2>{{ query.name }}</h2>
           <div class="query-id">ID: {{ query.query_id }}</div>
         </div>
-        <span class="badge badge-primary">{{ query.category.toUpperCase() }}</span>
+        <span :class="['badge', categoryInfo.badgeClass]">{{ categoryInfo.label }}</span>
+      </div>
+
+      <div class="benchmark-context-card" v-if="query.category !== 'custom'">
+        <strong>{{ categoryInfo.fullName }}.</strong>
+        <span>{{ categoryInfo.description }}</span>
       </div>
 
       <div class="detail-grid">
@@ -95,7 +100,7 @@
             />
           </div>
           <div v-if="hasJoinTree" class="viz-panel join-tree-panel">
-            <JoinTreeViewer :join-tree="rawHypergraphData?.join_tree" />
+            <JoinTreeViewer :join-tree="rawHypergraphData?.join_tree" :alias-map="aliasMap" />
           </div>
         </div>
         <UpSetViewer
@@ -159,6 +164,8 @@ import GYOStepViewer from '@/components/GYOStepViewer.vue'
 import UpSetViewer from '@/components/UpSetViewer.vue'
 import SqlDisplay from '@/components/SqlDisplay.vue'
 import type { QueryMetadata, VisualizationData, Hypergraph } from '@/types'
+import { benchmarkInfo } from '@/types/benchmarks'
+import { parseAliasMap } from '@/utils/sql'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,12 +174,15 @@ const query = ref<QueryMetadata | null>(null)
 const hypergraphData = ref<VisualizationData | null>(null)
 const rawHypergraphData = ref<Hypergraph | null>(null)
 const vizMode = ref<'graph' | 'graph-bubbles' | 'bubble-sets' | 'upset'>('graph')
+const aliasMap = computed(() => parseAliasMap(query.value?.sql))
 const loading = ref(false)
 const error = ref('')
 
 // GYO animation state
 const currentGYOStep = ref<number | null>(null)
 const gyoSectionExpanded = ref(false)
+
+const categoryInfo = computed(() => benchmarkInfo(query.value?.category ?? 'custom'))
 
 // Check if we have a join tree to display
 const hasJoinTree = computed(() => {
@@ -189,7 +199,6 @@ const hasGYOSteps = computed(() => {
 // Handle GYO step changes from the step viewer
 const handleGYOStepChange = (stepNumber: number) => {
   currentGYOStep.value = stepNumber
-  console.log('GYO step changed to:', stepNumber)
 }
 
 onMounted(async () => {
@@ -222,7 +231,6 @@ async function viewHypergraph() {
     // Initialize GYO animation to step 0 if we have GYO steps
     if (hypergraph.gyo_steps && hypergraph.gyo_steps.length > 0) {
       currentGYOStep.value = 0
-      console.log('Initialized GYO animation with', hypergraph.gyo_steps.length, 'steps')
     }
 
     // Generate visualization data for graph viewers
@@ -266,6 +274,20 @@ function executeQuery() {
   font-size: 0.875rem;
 }
 
+.benchmark-context-card {
+  background: var(--color-bg-secondary, #f9fafb);
+  border-left: 4px solid var(--color-primary, #3b82f6);
+  padding: 0.875rem 1rem;
+  border-radius: 0.375rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.benchmark-context-card strong {
+  margin-right: 0.4rem;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: 300px 1fr;
@@ -274,7 +296,7 @@ function executeQuery() {
 }
 
 .detail-card {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   padding: 1.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -296,7 +318,7 @@ function executeQuery() {
   display: flex;
   justify-content: space-between;
   padding: 0.75rem;
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border-radius: 0.375rem;
 }
 
@@ -352,7 +374,7 @@ function executeQuery() {
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
-  border-bottom: 2px solid #E5E7EB;
+  border-bottom: 2px solid var(--color-border);
   padding-bottom: 0;
 }
 
@@ -364,15 +386,15 @@ function executeQuery() {
   cursor: pointer;
   font-size: 0.938rem;
   font-weight: 500;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   transition: all 0.2s;
   position: relative;
   bottom: -2px;
 }
 
 .tab-button:hover {
-  color: #374151;
-  background: #F9FAFB;
+  color: var(--color-text);
+  background: var(--color-background-soft);
 }
 
 .tab-button.active {
@@ -414,9 +436,9 @@ function executeQuery() {
 }
 
 .gyo-animation-section {
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border-radius: 0.5rem;
-  border: 2px solid #E5E7EB;
+  border: 2px solid var(--color-border);
   overflow: hidden;
 }
 
@@ -428,7 +450,7 @@ function executeQuery() {
 }
 
 .gyo-section-header:hover {
-  background: #F3F4F6;
+  background: var(--color-background-mute);
 }
 
 .gyo-header-content {
@@ -441,18 +463,18 @@ function executeQuery() {
   font-size: 1.5rem;
   font-weight: 600;
   margin: 0;
-  color: #1F2937;
+  color: var(--color-text);
 }
 
 .expand-icon {
   font-size: 1.25rem;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   transition: transform 0.2s;
 }
 
 .section-description-collapsed {
   font-size: 0.875rem;
-  color: #9CA3AF;
+  color: var(--color-text-secondary);
   margin: 0.5rem 0 0 0;
   font-style: italic;
 }
@@ -463,7 +485,7 @@ function executeQuery() {
 
 .section-description {
   font-size: 0.938rem;
-  color: #6B7280;
+  color: var(--color-text-secondary);
   margin: 0 0 1.5rem 0;
   line-height: 1.5;
 }
@@ -476,14 +498,14 @@ function executeQuery() {
 }
 
 .gyo-graph-panel {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .gyo-steps-panel {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);

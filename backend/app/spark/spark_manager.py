@@ -31,6 +31,27 @@ class SparkManager:
         self.stage_metrics_collector = None  # Created during initialization
         self.operator_metrics_collector = None  # Created during initialization
         self.current_database: Optional[str] = None  # Track current connected database
+        # Currently-executing job group ID, set by _execute_query_sync and used by
+        # cancel_current_execution() to interrupt walk-away queries at the kiosk.
+        self._active_job_group: Optional[str] = None
+
+    def cancel_current_execution(self) -> Optional[str]:
+        """Cancel the in-flight Spark job group, if any.
+
+        Returns the cancelled job group ID, or None if nothing was running.
+        Used by the /execution/cancel endpoint to stop a runaway query without
+        having to kill the whole Spark session.
+        """
+        if not self.spark or not self._active_job_group:
+            return None
+        job_group = self._active_job_group
+        try:
+            self.spark.sparkContext.cancelJobGroup(job_group)
+            logger.info(f"Cancelled Spark job group: {job_group}")
+        except Exception as e:
+            logger.warning(f"Failed to cancel job group {job_group}: {e}")
+            return None
+        return job_group
 
     async def initialize(self):
         """Initialize Spark session with custom configuration"""
@@ -151,14 +172,19 @@ class SparkManager:
             Tuple of (metrics, plan, results)
         """
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            self._execute_query_sync,
-            sql,
-            use_optimization,
-            collect_results,
-            spark_config
-        )
+        try:
+            return await loop.run_in_executor(
+                None,
+                self._execute_query_sync,
+                sql,
+                use_optimization,
+                collect_results,
+                spark_config,
+            )
+        finally:
+            # Always release the job group tracker, even if the sync path raised
+            # before its own cleanup line ran (e.g. on cancellation or OOM).
+            self._active_job_group = None
 
     def _execute_query_sync(
         self,
@@ -274,10 +300,13 @@ class SparkManager:
             logger.debug(f"Could not determine job ID before execution: {e}")
             job_id_before = -1
 
-        # Set a job group to identify jobs from this query
+        # Set a job group to identify jobs from this query.
+        # interruptOnCancel=True so cancel_current_execution() can actually
+        # interrupt the executor thread for runaway/walk-up queries.
         import uuid
         job_group_id = f"query_{uuid.uuid4().hex[:8]}"
-        self.spark.sparkContext.setJobGroup(job_group_id, sql[:100])  # First 100 chars of SQL as description
+        self.spark.sparkContext.setJobGroup(job_group_id, sql[:100], interruptOnCancel=True)
+        self._active_job_group = job_group_id
         logger.debug(f"Set job group ID: {job_group_id}")
 
         # Measure execution time
@@ -311,6 +340,8 @@ class SparkManager:
 
         # Clear the job group immediately after execution
         self.spark.sparkContext.setJobGroup(None, None)
+        if self._active_job_group == job_group_id:
+            self._active_job_group = None
 
         # Get job IDs created during this execution using job group ID
         # This is more reliable than tracking before/after job IDs
@@ -370,7 +401,7 @@ class SparkManager:
 
         # Extract metrics from Spark UI / listener
         # Pass the plan_tree for operator metrics extraction
-        metrics = self._extract_metrics(df, execution_time, planning_time, all_job_ids, plan_tree)
+        metrics = self._extract_metrics(df, execution_time, planning_time, all_job_ids, plan_tree, result_count)
 
         # Extract execution plan
         plan = ExecutionPlan(
@@ -385,13 +416,31 @@ class SparkManager:
 
         return metrics, plan, results
 
+    @staticmethod
+    def _compute_peak_intermediate_rows(operator_metrics: List[Dict[str, Any]]) -> int:
+        """Largest row count emitted by any join operator in the plan.
+
+        Joins are where intermediate results materialise, so the maximum join
+        output is a faithful proxy for the peak intermediate the plan had to
+        process. Returns 0 if there are no join operators or no metrics.
+        """
+        peak = 0
+        for op in operator_metrics or []:
+            if op.get('operator_type') == 'join':
+                try:
+                    peak = max(peak, int(op.get('num_output_rows', 0) or 0))
+                except (ValueError, TypeError):
+                    continue
+        return peak
+
     def _extract_metrics(
         self,
         df: DataFrame,
         execution_time: float,
         planning_time: float,
         job_ids: List[int],
-        plan_tree: Optional[Dict[str, Any]] = None
+        plan_tree: Optional[Dict[str, Any]] = None,
+        result_count: Optional[int] = None
     ) -> ExecutionMetrics:
         """Extract comprehensive execution metrics from DataFrame"""
 
@@ -479,6 +528,19 @@ class SparkManager:
                 if plan_tree is None:
                     logger.debug("No plan tree available for operator metrics collection")
 
+            # Peak intermediate join size: the largest number of rows emitted
+            # by any join operator. For a guarded aggregate query the reference
+            # plan can emit billions of join tuples to return a single row;
+            # the optimised plan's peak is dramatically smaller. This is the
+            # honest measure of materialisation that the comparison highlights.
+            peak_intermediate_rows = self._compute_peak_intermediate_rows(operator_metrics)
+
+            # Spark's stage outputRecords only counts rows written to external
+            # storage, so it is 0 for a SELECT. Use the collected result count
+            # for the query's actual output-row figure when available.
+            if result_count is not None:
+                total_output_rows = result_count
+
             return ExecutionMetrics(
                 execution_time_ms=execution_time,
                 planning_time_ms=planning_time,
@@ -487,6 +549,7 @@ class SparkManager:
                 total_output_rows=total_output_rows,
                 intermediate_result_size_bytes=intermediate_size,
                 avoided_materialization_bytes=0,  # Will be calculated by comparing ref vs opt
+                peak_intermediate_rows=peak_intermediate_rows,
                 # Detailed metrics
                 operator_counts=operator_counts,
                 shuffle_read_bytes=shuffle_read,
@@ -512,12 +575,17 @@ class SparkManager:
         yannakakis_val = "true" if config.yannakakis_enabled else "false"
         physical_count_val = "true" if config.physical_count_join_enabled else "false"
         unguarded_val = "true" if config.unguarded_enabled else "false"
+        group_in_leaves_val = "true" if config.count_group_in_leaves else "false"
 
         self.spark.conf.set("spark.sql.yannakakis.enabled", yannakakis_val)
         self.spark.conf.set("spark.sql.yannakakis.physicalCountJoinEnabled", physical_count_val)
         self.spark.conf.set("spark.sql.yannakakis.unguardedEnabled", unguarded_val)
+        self.spark.conf.set("spark.sql.yannakakis.countGroupInLeaves", group_in_leaves_val)
 
-        logger.info(f"Applied Spark config: yannakakis={yannakakis_val}, physicalCountJoin={physical_count_val}, unguarded={unguarded_val}")
+        logger.info(
+            "Applied Spark config: yannakakis=%s, physicalCountJoin=%s, unguarded=%s, groupInLeaves=%s",
+            yannakakis_val, physical_count_val, unguarded_val, group_in_leaves_val,
+        )
 
         # Apply any custom options
         if config.custom_options:

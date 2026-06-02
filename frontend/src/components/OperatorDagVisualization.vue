@@ -18,6 +18,12 @@ interface OperatorMetric {
 interface Props {
   operatorMetrics: OperatorMetric[]
   title?: string
+  // Optional shared maximum row count to normalise edge width/colour against.
+  // When two DAGs are shown side by side (reference vs optimised), passing the
+  // same value to both makes their arrows directly comparable — otherwise each
+  // normalises to its own max and the optimised plan's small-but-uniform rows
+  // look as thick/red as the reference plan's billions.
+  globalMaxRows?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -290,8 +296,12 @@ const graphData = computed(() => {
     opMap.set(String(op.operator_id), op)
   })
 
-  // Calculate maximum row count across all operators for scaling
-  const maxRows = Math.max(...props.operatorMetrics.map(op => op.num_output_rows), 1)
+  // Maximum row count for scaling. Prefer a shared (ref+opt) max when supplied
+  // so the two DAGs are comparable; otherwise fall back to this plan's own max.
+  const localMax = Math.max(...props.operatorMetrics.map(op => op.num_output_rows), 1)
+  const maxRows = props.globalMaxRows && props.globalMaxRows > 0
+    ? props.globalMaxRows
+    : localMax
 
   // Add edges, reconnecting through hidden nodes
   visibleOps.forEach(op => {
@@ -339,10 +349,10 @@ function initializeGraph() {
           'text-outline-width': 3,  // Thick outline for visibility
           'text-valign': 'center',
           'text-halign': 'center',
-          'font-size': '14px',  // Increased from 12px
+          'font-size': '16px',
           'font-weight': 'bold',
-          'width': '150px',  // Increased from 120px
-          'height': '70px',  // Increased from 60px
+          'width': '160px',
+          'height': '74px',
           'shape': 'roundrectangle',
           'border-width': 2,
           'border-color': '#ffffff',
@@ -381,7 +391,7 @@ function initializeGraph() {
       {
         selector: 'edge',
         style: {
-          // Width scaled relative to max rows in plan (logarithmic scale: 1-10 pixels)
+          // Width scaled relative to max rows in plan (logarithmic scale: 1-20 pixels)
           'width': function(ele: any) {
             const rows = ele.data('rows') || 0
             const maxRows = ele.data('maxRows') || 1
@@ -393,9 +403,10 @@ function initializeGraph() {
             const logRows = Math.log10(rows + 1)
             const logMax = Math.log10(maxRows + 1)
 
-            // Scale from 1 to 10 pixels based on ratio
+            // Scale from 1 to 20 pixels based on ratio (2x the previous max so
+            // ref-vs-opt differences are easier to discern at a glance)
             const ratio = logRows / logMax
-            return Math.max(1, Math.min(10, 1 + ratio * 9))
+            return Math.max(1, Math.min(20, 1 + ratio * 19))
           },
           // Dotted line for zero rows, solid for non-zero
           'line-style': function(ele: any) {
@@ -421,11 +432,11 @@ function initializeGraph() {
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
           'label': 'data(label)',
-          'font-size': '13px',  // Increased from 11px
+          'font-size': '17px',  // row-count labels are the story — keep them legible
           'font-weight': 'bold',
           'color': '#000000',  // Black text
           'text-outline-color': '#ffffff',  // White outline/border
-          'text-outline-width': 3,  // Thick outline for visibility
+          'text-outline-width': 4,  // Thick outline for visibility over edges
           'text-background-opacity': 0  // Remove background (outline is enough)
         }
       },
@@ -516,8 +527,16 @@ function initializeGraph() {
 }
 
 function fitGraph() {
-  if (cy) {
-    cy.fit(undefined, 50)
+  if (!cy) return
+  cy.fit(undefined, 40)
+  // Don't leave small graphs zoomed way out: fit() maximises to the container,
+  // but a short LR chain in a tall panel can still end up tiny. Nudge the zoom
+  // up to a readable floor (capped) and recentre.
+  const z = cy.zoom()
+  const FLOOR = 0.75
+  if (z < FLOOR) {
+    cy.zoom(Math.min(FLOOR, cy.maxZoom()))
+    cy.center()
   }
 }
 
@@ -595,7 +614,10 @@ function applyLayout() {
     name: selectedLayout.value,
     animate: true,
     animationDuration: 500,
-    fit: true,
+    // Fit ourselves after the layout settles (see below). The layout's own
+    // auto-fit animates and would override our zoom-floor, leaving short
+    // graphs (e.g. the optimised plan) tiny.
+    fit: false,
     padding: 30
   }
 
@@ -608,10 +630,13 @@ function applyLayout() {
       layoutConfig.roots = undefined  // Auto-detect root nodes
       break
     case 'dagre':
-      layoutConfig.rankDir = 'TB'  // Top to bottom
-      layoutConfig.nodeSep = 50
+      // Left-to-right: a join chain is mostly linear, so LR fills the wide
+      // comparison panel (taller, more legible nodes) instead of producing a
+      // tall, thin column that fit-to-view shrinks into the centre.
+      layoutConfig.rankDir = 'LR'
+      layoutConfig.nodeSep = 40
       layoutConfig.edgeSep = 10
-      layoutConfig.rankSep = 75
+      layoutConfig.rankSep = 90
       break
     case 'cose':
       layoutConfig.idealEdgeLength = 150
@@ -634,8 +659,11 @@ function applyLayout() {
       break
   }
 
-  cy.layout(layoutConfig).run()
-  nextTick(() => fitGraph())
+  const layout = cy.layout(layoutConfig)
+  // Fit only once the layout has settled, so our zoom-floor isn't overridden
+  // by the layout's animated auto-fit.
+  layout.one('layoutstop', () => fitGraph())
+  layout.run()
 }
 
 // Reset layout: clear selection, reset zoom/pan, reapply default layout
@@ -849,12 +877,34 @@ onMounted(() => {
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   document.addEventListener('click', handleClickOutside)
   initializeGraph()
-  nextTick(() => fitGraph())
+  // Apply the per-layout config (dagre = LR) on first render, not just the
+  // generic init layout, then fit.
+  nextTick(() => applyLayout())
+
+  // Re-fit when the container first gets a real size. The DAG can initialise
+  // while its section is collapsed (0×0), which makes fit() compute a tiny,
+  // off-centre zoom; once the section expands we re-fit against the real box.
+  if (containerRef.value && typeof ResizeObserver !== 'undefined') {
+    let lastW = 0, lastH = 0
+    resizeObserver = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      if (!r) return
+      // Only act on meaningful size changes (e.g. 0 -> visible).
+      if (Math.abs(r.width - lastW) > 20 || Math.abs(r.height - lastH) > 20) {
+        lastW = r.width; lastH = r.height
+        if (r.width > 50 && r.height > 50) nextTick(() => fitGraph())
+      }
+    })
+    resizeObserver.observe(containerRef.value)
+  }
 })
+
+let resizeObserver: ResizeObserver | null = null
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
   document.removeEventListener('click', handleClickOutside)
+  if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null }
 })
 </script>
 
@@ -1005,21 +1055,23 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
   border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .dag-header h4 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 1rem;
   color: var(--color-text);
 }
 
 .controls {
   display: flex;
-  gap: 1rem;
-  align-items: flex-start;
+  gap: 0.5rem;
+  align-items: center;
   flex-wrap: wrap;
 }
 
@@ -1349,12 +1401,12 @@ onUnmounted(() => {
   color: var(--color-primary);
 }
 
-/* Dark mode refinements for stage boundaries */
-:root.dark .stage-boundary {
+/* Dark mode refinements (app toggles .dark-mode on <html>, not :root.dark) */
+html.dark-mode .stage-boundary {
   border-color: #64748b !important;
 }
 
-:root.dark .export-menu {
+html.dark-mode .export-menu {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 </style>

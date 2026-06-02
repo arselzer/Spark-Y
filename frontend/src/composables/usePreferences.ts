@@ -5,7 +5,7 @@ interface Preferences {
   showHypergraphSidebar: boolean
   dagLayoutStacked: boolean
   expandedSections: Record<string, boolean>
-  sidebarVizMode: 'graph' | 'bubbles' | 'hulls'
+  sidebarVizMode: 'graph' | 'bubbles' | 'hulls' | 'upset'
 }
 
 const STORAGE_KEY = 'yannasparkis_preferences'
@@ -16,7 +16,7 @@ const defaultPreferences: Preferences = {
   dagLayoutStacked: true,
   expandedSections: {
     breakdown: true,
-    metrics: true,
+    metrics: false,
     timeline: true,
     timeBreakdown: true,
     operatorFlow: true,
@@ -77,7 +77,7 @@ export function usePreferences() {
     preferences.value.expandedSections[section] = expanded
   }
 
-  const setSidebarVizMode = (mode: 'graph' | 'bubbles' | 'hulls') => {
+  const setSidebarVizMode = (mode: 'graph' | 'bubbles' | 'hulls' | 'upset') => {
     preferences.value.sidebarVizMode = mode
   }
 

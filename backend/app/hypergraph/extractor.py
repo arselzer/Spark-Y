@@ -210,8 +210,10 @@ class HypergraphExtractor:
         # Check if acyclic and compute join tree if acyclic
         is_acyclic, join_tree, gyo_steps = self._check_acyclic_advanced(nodes, hyperedges)
 
-        # Check if guarded and determine guardedness type
-        is_guarded, guardedness_type = self._check_guardedness(nodes, hyperedges)
+        # Check if guarded and determine guardedness type (+ the guard relation
+        # when guarded, or the uncovered output variables when unguarded)
+        is_guarded, guardedness_type, guard_edge_id, uncovered_output_nodes = \
+            self._check_guardedness(nodes, hyperedges)
 
         # Calculate complexity metrics
         complexity_metrics = self._calculate_complexity_metrics(
@@ -227,6 +229,8 @@ class HypergraphExtractor:
             is_acyclic=is_acyclic,
             is_guarded=is_guarded,
             guardedness_type=guardedness_type,
+            guard_edge_id=guard_edge_id,
+            uncovered_output_nodes=uncovered_output_nodes,
             join_tree=join_tree,
             gyo_steps=gyo_steps,
             num_relations=len(tables),
@@ -619,7 +623,7 @@ class HypergraphExtractor:
         self,
         nodes: List[HypergraphNode],
         edges: List[HypergraphEdge]
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Optional[str], List[str]]:
         """
         Check if the query is guarded, piecewise-guarded, or unguarded.
 
@@ -631,12 +635,14 @@ class HypergraphExtractor:
         - UNGUARDED: if no combination of relations covers all output variables
 
         Returns:
-            Tuple of (is_guarded: bool, guardedness_type: str)
-            guardedness_type is one of: "guarded", "piecewise_guarded", "unguarded"
+            Tuple of (is_guarded, guardedness_type, guard_edge_id, uncovered_output_nodes)
+            - guardedness_type: "guarded" | "piecewise_guarded" | "unguarded"
+            - guard_edge_id: the covering relation when guarded, else None
+            - uncovered_output_nodes: output node ids no relation covers (unguarded), else []
         """
         if len(edges) == 0:
             # No relations means trivially guarded
-            return True, "guarded"
+            return True, "guarded", None, []
 
         # Collect all output attribute node IDs
         # Output attributes are nodes of type "output_attribute" or nodes with output_attributes
@@ -650,7 +656,7 @@ class HypergraphExtractor:
         # If no output attributes, query is trivially guarded
         if not output_node_ids:
             logger.info("No output attributes found - trivially guarded")
-            return True, "guarded"
+            return True, "guarded", None, []
 
         logger.info(f"Output node IDs for guardedness check: {output_node_ids}")
 
@@ -659,7 +665,7 @@ class HypergraphExtractor:
             edge_node_set = set(edge.nodes)
             if output_node_ids.issubset(edge_node_set):
                 logger.info(f"Edge {edge.id} is a guard - covers all output attributes")
-                return True, "guarded"
+                return True, "guarded", edge.id, []
 
         # No single guard found - check if piecewise guarded
         # Build coverage: which output nodes are covered by which edges
@@ -671,12 +677,12 @@ class HypergraphExtractor:
         if output_node_ids.issubset(covered_by_any):
             # All output attributes are covered by some edge(s)
             logger.info("Piecewise guarded - multiple edges together cover all output attributes")
-            return False, "piecewise_guarded"
+            return False, "piecewise_guarded", None, []
         else:
             # Some output attributes not covered by any edge
             uncovered = output_node_ids - covered_by_any
             logger.info(f"Unguarded - output attributes not in any edge: {uncovered}")
-            return False, "unguarded"
+            return False, "unguarded", None, sorted(uncovered)
 
     def _check_acyclic_advanced(
         self,
@@ -1061,11 +1067,20 @@ class HypergraphExtractor:
         return join_predicates
 
     def _find_attribute(self, col_name: str, col_id: str, tables: Dict[str, List[str]]) -> Optional[str]:
-        """Find full attribute name (table.col#id) given column name and ID"""
+        """Find full attribute name (table.col#id) given column name and ID.
+
+        Case-insensitive on the name because Spark preserves the SQL's
+        original casing in join/filter condition strings (``Id#7350``),
+        while JDBC sources like Postgres expose columns folded to lowercase
+        (``id#7350``) — without this, STATS-CEB joins were silently dropped.
+        The ``#id`` suffix is the authoritative match; the name check stays
+        only as a defensive tie-break.
+        """
         target = f"#{col_id}"
+        col_name_lower = col_name.lower()
         for table_name, attributes in tables.items():
             for attr in attributes:
-                if attr.endswith(target) and col_name in attr:
+                if attr.endswith(target) and col_name_lower in attr.lower():
                     return attr
         return None
 

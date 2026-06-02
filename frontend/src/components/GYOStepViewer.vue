@@ -290,7 +290,8 @@ onUnmounted(() => {
 
 <style scoped>
 .gyo-step-viewer {
-  background: white;
+  background: var(--color-surface);
+  color: var(--color-text);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   overflow: hidden;
@@ -298,24 +299,24 @@ onUnmounted(() => {
 
 .viewer-header {
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #f9fafb;
+  background: var(--color-background-soft);
 }
 
 .viewer-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #1f2937;
+  color: var(--color-text);
 }
 
 .step-counter {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-weight: 600;
-  background: #e5e7eb;
+  background: var(--color-border);
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
 }
@@ -323,7 +324,7 @@ onUnmounted(() => {
 .no-steps-message {
   padding: 3rem;
   text-align: center;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .no-steps-message p {
@@ -332,7 +333,7 @@ onUnmounted(() => {
 
 .no-steps-message .hint {
   font-size: 0.875rem;
-  color: #9ca3af;
+  color: var(--color-text-secondary);
 }
 
 .step-content {
@@ -358,7 +359,7 @@ onUnmounted(() => {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #e5e7eb;
+  background: var(--color-border);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -377,7 +378,7 @@ onUnmounted(() => {
 }
 
 .step-details {
-  background: #f9fafb;
+  background: var(--color-background-soft);
   border-radius: 6px;
   padding: 1.5rem;
 }
@@ -404,7 +405,7 @@ onUnmounted(() => {
 
 .step-description {
   font-size: 1rem;
-  color: #374151;
+  color: var(--color-text);
   margin: 0 0 1.5rem 0;
   line-height: 1.6;
 }
@@ -417,7 +418,7 @@ onUnmounted(() => {
 }
 
 .info-card {
-  background: white;
+  background: var(--color-surface);
   border-radius: 6px;
   padding: 1rem;
   border-left: 4px solid;
@@ -437,7 +438,7 @@ onUnmounted(() => {
   margin: 0 0 0.5rem 0;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--color-text);
 }
 
 .info-card ul {
@@ -448,7 +449,7 @@ onUnmounted(() => {
 
 .info-card li {
   font-size: 0.875rem;
-  color: #4b5563;
+  color: var(--color-text-secondary);
   margin: 0.25rem 0;
   font-family: 'Courier New', monospace;
 }
@@ -460,7 +461,7 @@ onUnmounted(() => {
 .progress-bar {
   width: 100%;
   height: 8px;
-  background: #e5e7eb;
+  background: var(--color-border);
   border-radius: 9999px;
   overflow: hidden;
   margin-bottom: 0.5rem;
@@ -476,7 +477,7 @@ onUnmounted(() => {
   text-align: center;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--color-text);
   margin: 0;
 }
 
@@ -486,7 +487,7 @@ onUnmounted(() => {
   gap: 1rem;
   justify-content: center;
   padding-top: 1.5rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--color-border);
   margin-top: 1.5rem;
 }
 
@@ -495,7 +496,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .speed-control select {
@@ -503,7 +504,7 @@ onUnmounted(() => {
   border: 1px solid #d1d5db;
   border-radius: 4px;
   font-size: 0.875rem;
-  background: white;
+  background: var(--color-surface);
   cursor: pointer;
 }
 
@@ -519,8 +520,8 @@ onUnmounted(() => {
 
 .btn-icon {
   padding: 0.5rem 0.75rem;
-  background: #e5e7eb;
-  color: #374151;
+  background: var(--color-border);
+  color: var(--color-text);
 }
 
 .btn-icon:hover:not(:disabled) {
@@ -566,7 +567,7 @@ onUnmounted(() => {
   color: #1e40af;
   margin: 0 0 1rem 0;
   font-family: 'Courier New', monospace;
-  background: white;
+  background: var(--color-surface);
   padding: 0.75rem;
   border-radius: 4px;
 }
@@ -579,11 +580,11 @@ onUnmounted(() => {
   margin: 0 0 0.75rem 0;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--color-text);
 }
 
 .relationship-card {
-  background: white;
+  background: var(--color-surface);
   border: 1px solid #bfdbfe;
   border-radius: 6px;
   padding: 1rem;
@@ -600,7 +601,7 @@ onUnmounted(() => {
   gap: 0.5rem;
   margin-bottom: 0.75rem;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .ear-label {
@@ -643,7 +644,7 @@ onUnmounted(() => {
 
 .node-list strong {
   font-size: 0.813rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .node-tags {
@@ -655,8 +656,8 @@ onUnmounted(() => {
 .node-tag {
   font-family: 'Courier New', monospace;
   font-size: 0.75rem;
-  background: #f3f4f6;
-  color: #374151;
+  background: var(--color-background-mute);
+  color: var(--color-text);
   padding: 0.125rem 0.375rem;
   border-radius: 3px;
   border: 1px solid #d1d5db;

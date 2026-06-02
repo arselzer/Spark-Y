@@ -81,6 +81,10 @@ class Hypergraph(BaseModel):
     is_acyclic: bool = False
     is_guarded: bool = False
     guardedness_type: str = "unknown"  # "guarded", "piecewise_guarded", "unguarded", "unknown"
+    # The relation (edge id) that covers all output variables, when guarded.
+    guard_edge_id: Optional[str] = None
+    # Output variable node ids that no relation covers, when unguarded.
+    uncovered_output_nodes: List[str] = []
 
     # Statistics
     num_relations: int = 0

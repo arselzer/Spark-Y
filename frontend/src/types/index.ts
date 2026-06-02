@@ -2,7 +2,7 @@
  * TypeScript type definitions for the query optimization demo
  */
 
-export type QueryCategory = 'job' | 'tpch' | 'tpcds' | 'custom'
+export type QueryCategory = 'job' | 'tpch' | 'tpcds' | 'stats-ceb' | 'snap' | 'custom'
 
 export interface QueryMetadata {
   query_id: string
@@ -19,6 +19,7 @@ export interface SparkConfig {
   yannakakis_enabled: boolean
   physical_count_join_enabled: boolean
   unguarded_enabled: boolean
+  count_group_in_leaves?: boolean
   custom_options?: Record<string, string> | null
 }
 
@@ -38,8 +39,10 @@ export interface ExecutionMetrics {
   total_output_rows: number
   intermediate_result_size_bytes: number
   avoided_materialization_bytes: number
+  peak_intermediate_rows?: number
   peak_memory_mb?: number
   num_stages: number
+  timed_out?: boolean
 }
 
 export interface ExecutionPlan {
@@ -69,6 +72,49 @@ export interface ExecutionResult {
 
   speedup?: number
   memory_reduction?: number
+  avoided_intermediate_rows?: number
+}
+
+export interface SavedRun {
+  id: string
+  name: string
+  query_id?: string
+  saved_at: string
+  result: ExecutionResult
+}
+
+export interface SavedRunSummary {
+  id: string
+  name: string
+  query_id?: string
+  saved_at: string
+  sql: string
+  speedup?: number
+  avoided_intermediate_rows?: number
+  reference_timed_out: boolean
+}
+
+export interface SavedBatchItem {
+  query_id?: string
+  name: string
+  result: ExecutionResult
+}
+
+export interface SavedBatch {
+  id: string
+  name: string
+  saved_at: string
+  items: SavedBatchItem[]
+}
+
+export interface SavedBatchSummary {
+  id: string
+  name: string
+  saved_at: string
+  query_count: number
+  overall_speedup?: number
+  total_avoided_intermediate_rows: number
+  timeout_count: number
 }
 
 export interface HypergraphNode {
@@ -161,6 +207,10 @@ export interface VisualizationData {
     num_relations?: number
     num_joins?: number
     num_aggregates?: number
+    is_guarded?: boolean
+    guardedness_type?: string
+    guard_label?: string | null
+    uncovered_output_labels?: string[]
   }
 }
 

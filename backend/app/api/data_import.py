@@ -4,7 +4,8 @@ API routes for importing data from external databases into Spark
 from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
+import asyncio
 import logging
 import os
 import io
@@ -18,6 +19,46 @@ from app.dependencies import get_spark_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _execute_sql_dump_sync(
+    sql_content: str, host: str, port: int, database: str, username: str, password: str
+) -> Tuple[int, int, list]:
+    """Execute a SQL dump against PostgreSQL (blocking).
+
+    Runs the whole statement loop synchronously; callers invoke it via
+    run_in_executor so the FastAPI event loop stays responsive during a load
+    (these dumps can be thousands of statements and take minutes). Returns
+    (executed_statements, transaction_batches, errors).
+    """
+    import psycopg2
+
+    executed = 0
+    errors: list = []
+    conn = psycopg2.connect(host=host, port=port, database=database, user=username, password=password)
+    conn.autocommit = False
+    cursor = conn.cursor()
+    statements = re.split(r';\s*\n', sql_content)
+    batch_size = 1000
+    batches = 0
+    try:
+        for statement in statements:
+            statement = statement.strip()
+            if not statement or statement.startswith('--'):
+                continue
+            try:
+                cursor.execute(statement)
+                executed += 1
+                if executed % batch_size == 0:
+                    conn.commit()
+                    batches += 1
+            except Exception as e:
+                errors.append(f"Error executing statement (truncated): {statement[:100]}... Error: {e}")
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+    return executed, batches + 1, errors
 
 # SQL dumps directory
 SQL_DUMPS_DIR = Path("/app/data/sql-dumps")
@@ -167,6 +208,138 @@ async def import_from_postgres(config: PostgresConfig):
     except Exception as e:
         logger.error(f"Unexpected error during import: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Parquet materialisation ────────────────────────────────────────────────
+# One-time: read every table from Postgres and persist it as Parquet on the
+# mounted data volume. Loading from those files afterwards is far faster than
+# re-importing over JDBC — registration is lazy and row counts come from the
+# Parquet footer, so there is no full scan — and it removes the Postgres
+# dependency at query time. The columnar, OS-cached Parquet reads also lift the
+# JDBC base-scan floor that was masking the optimisation's speedups.
+PARQUET_DIR = Path("/app/data/parquet")
+PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _parquet_dataset_dir(database: str) -> Path:
+    """Resolve a dataset directory, guarding against path traversal."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", database)
+    path = PARQUET_DIR / safe
+    if not path.resolve().is_relative_to(PARQUET_DIR.resolve()):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return path
+
+
+@router.post("/parquet/materialize", response_model=ImportResponse)
+async def materialize_to_parquet(config: PostgresConfig):
+    """Read all tables from a Postgres database and write them to Parquet.
+
+    One-time and slow-ish (a full JDBC read of each table); run it before the
+    demo. Afterwards use POST /parquet/load for a fast, Postgres-free startup.
+    """
+    spark_manager = get_spark_manager()
+    spark = spark_manager.spark
+    if spark is None:
+        raise HTTPException(status_code=503, detail="Spark session not initialized")
+
+    jdbc_url = f"jdbc:postgresql://{config.host}:{config.port}/{config.database}"
+    dataset_dir = _parquet_dataset_dir(config.database)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    def _reader(dbtable: str):
+        return (
+            spark.read.format("jdbc")
+            .option("url", jdbc_url)
+            .option("driver", "org.postgresql.Driver")
+            .option("dbtable", dbtable)
+            .option("user", config.username)
+            .option("password", config.password)
+            .load()
+        )
+
+    def _run():
+        tables_query = """(
+            SELECT table_name FROM information_schema.tables
+            WHERE table_catalog = current_database()
+            AND table_schema = 'public' AND table_type = 'BASE TABLE'
+        ) as tables"""
+        tables = [r.table_name for r in _reader(tables_query).collect()]
+        done, errs = [], []
+        for t in tables:
+            try:
+                logger.info(f"[parquet] materialising {t}")
+                _reader(t).write.mode("overwrite").parquet(str(dataset_dir / t))
+                done.append(t)
+            except Exception as e:
+                logger.error(f"[parquet] failed {t}: {e}")
+                errs.append(f"{t}: {e}")
+        return done, errs
+
+    loop = asyncio.get_event_loop()
+    done, errs = await loop.run_in_executor(None, _run)
+    if not done:
+        return ImportResponse(success=False, message="No tables materialised", tables_imported=[], errors=errs)
+    return ImportResponse(
+        success=True,
+        message=f"Materialised {len(done)} tables to Parquet at {dataset_dir}",
+        tables_imported=done,
+        errors=errs,
+    )
+
+
+@router.post("/parquet/load", response_model=ImportResponse)
+async def load_from_parquet(database: str = "imdb"):
+    """Register every Parquet table for a dataset as a Spark temp view (fast)."""
+    spark_manager = get_spark_manager()
+    spark = spark_manager.spark
+    if spark is None:
+        raise HTTPException(status_code=503, detail="Spark session not initialized")
+
+    dataset_dir = _parquet_dataset_dir(database)
+    if not dataset_dir.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Parquet dataset for '{database}'. Materialise it first via /parquet/materialize.",
+        )
+
+    def _run():
+        done, errs = [], []
+        for table_path in sorted(dataset_dir.iterdir()):
+            if not table_path.is_dir():
+                continue
+            name = table_path.name
+            try:
+                spark.read.parquet(str(table_path)).createOrReplaceTempView(name)
+                done.append(name)
+            except Exception as e:
+                errs.append(f"{name}: {e}")
+        return done, errs
+
+    loop = asyncio.get_event_loop()
+    done, errs = await loop.run_in_executor(None, _run)
+    if done:
+        spark_manager.set_current_database(database)
+    if not done:
+        return ImportResponse(success=False, message="No Parquet tables loaded", tables_imported=[], errors=errs)
+    return ImportResponse(
+        success=True,
+        message=f"Loaded {len(done)} tables from Parquet ({database})",
+        tables_imported=done,
+        errors=errs,
+    )
+
+
+@router.get("/parquet/datasets")
+async def list_parquet_datasets():
+    """List materialised Parquet datasets available on disk."""
+    datasets = []
+    if PARQUET_DIR.exists():
+        for d in sorted(PARQUET_DIR.iterdir()):
+            if not d.is_dir():
+                continue
+            tables = sorted(t.name for t in d.iterdir() if t.is_dir())
+            datasets.append({"database": d.name, "table_count": len(tables), "tables": tables})
+    return {"datasets": datasets}
 
 
 @router.get("/postgres/test-connection")
@@ -1248,71 +1421,23 @@ async def load_sql_dump_from_library(
             sql_content = filepath.read_text()
             logger.info(f"Loading SQL dump from library: {filename}, size: {len(sql_content)} bytes")
 
-        # Import using psycopg2 for direct PostgreSQL execution
         try:
-            import psycopg2
+            import psycopg2  # noqa: F401
         except ImportError:
             raise HTTPException(
                 status_code=500,
                 detail="psycopg2 not installed. Cannot execute SQL dump directly."
             )
 
-        executed_statements = 0
-        errors = []
-
         try:
-            # Connect to PostgreSQL
-            conn = psycopg2.connect(
-                host=host,
-                port=port,
-                database=database,
-                user=username,
-                password=password
+            logger.info("Starting SQL import (off the event loop) with transaction batching...")
+            # Run the blocking statement loop in a worker thread so the backend
+            # stays responsive (health checks, other requests) during the load.
+            loop = asyncio.get_event_loop()
+            executed_statements, batch_count, errors = await loop.run_in_executor(
+                None, _execute_sql_dump_sync, sql_content, host, port, database, username, password
             )
-            # Use transaction instead of autocommit for better performance
-            conn.autocommit = False
-            cursor = conn.cursor()
-
-            logger.info("Starting SQL import with transaction batching...")
-
-            # Split SQL into individual statements
-            statements = re.split(r';\s*\n', sql_content)
-
-            # Process statements in transaction batches
-            transaction_batch_size = 1000
-            batch_count = 0
-
-            for statement in statements:
-                statement = statement.strip()
-
-                # Skip empty statements and comments
-                if not statement or statement.startswith('--'):
-                    continue
-
-                try:
-                    cursor.execute(statement)
-                    executed_statements += 1
-
-                    # Commit every N statements for progress checkpointing
-                    if executed_statements % transaction_batch_size == 0:
-                        conn.commit()
-                        batch_count += 1
-                        logger.info(f"Executed {executed_statements} statements ({batch_count} transaction batches)...")
-
-                except Exception as e:
-                    error_msg = f"Error executing statement (truncated): {statement[:100]}... Error: {str(e)}"
-                    logger.warning(error_msg)
-                    errors.append(error_msg)
-                    # Continue with next statement (don't rollback entire transaction)
-
-            # Commit remaining statements
-            conn.commit()
-            logger.info(f"Committed final transaction batch")
-
-            cursor.close()
-            conn.close()
-
-            logger.info(f"Executed {executed_statements} SQL statements in PostgreSQL using {batch_count + 1} transaction batch(es)")
+            logger.info(f"Executed {executed_statements} SQL statements in PostgreSQL using {batch_count} transaction batch(es)")
 
             # Now use existing import logic to load tables into Spark
             config = PostgresConfig(
@@ -1334,8 +1459,8 @@ async def load_sql_dump_from_library(
                 "errors": errors[:10] + import_result.errors[:10]  # Return first 10 of each
             }
 
-        except psycopg2.Error as e:
-            error_msg = f"PostgreSQL error: {str(e)}"
+        except Exception as e:
+            error_msg = f"SQL dump load error: {str(e)}"
             logger.error(error_msg)
             raise HTTPException(status_code=500, detail=error_msg)
 

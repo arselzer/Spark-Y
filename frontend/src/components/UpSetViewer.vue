@@ -209,8 +209,9 @@ function clearHighlight() {
 .upset-viewer {
   display: flex;
   flex-direction: column;
-  height: 1200px;
-  background: white;
+  height: clamp(500px, 80vh, 1200px);
+  background: var(--color-surface);
+  color: var(--color-text);
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -235,11 +236,11 @@ function clearHighlight() {
 
 .stat {
   font-size: 0.875rem;
-  color: #6B7280;
+  color: var(--color-text-secondary);
 }
 
 .stat strong {
-  color: #1F2937;
+  color: var(--color-text);
   font-size: 1rem;
 }
 
@@ -265,7 +266,7 @@ function clearHighlight() {
   padding-bottom: 0.5rem;
   font-weight: 600;
   font-size: 0.875rem;
-  color: #4B5563;
+  color: var(--color-text-secondary);
 }
 
 .bars-chart {
@@ -274,7 +275,7 @@ function clearHighlight() {
   gap: 4px;
   align-items: flex-end;
   height: 200px;
-  border-bottom: 2px solid #E5E7EB;
+  border-bottom: 2px solid var(--color-border);
   padding: 0 0.5rem;
 }
 
@@ -395,9 +396,9 @@ function clearHighlight() {
 .intersection-details {
   margin-top: 2rem;
   padding: 1rem;
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border-radius: 0.5rem;
-  border: 1px solid #E5E7EB;
+  border: 1px solid var(--color-border);
 }
 
 .intersection-details h4 {

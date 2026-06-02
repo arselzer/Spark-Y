@@ -24,6 +24,11 @@ const router = createRouter({
       component: () => import('@/views/ExecuteView.vue')
     },
     {
+      path: '/batch',
+      name: 'batch',
+      component: () => import('@/views/BatchRunView.vue')
+    },
+    {
       path: '/data-import',
       name: 'data-import',
       component: () => import('@/views/DataImportView.vue')

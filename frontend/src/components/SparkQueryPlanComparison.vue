@@ -131,13 +131,8 @@ function transformLogicalPlanNode(sparkNode: any): any {
 // Spark's logical plan JSON is a flat array in depth-first order
 // We reconstruct the tree using the 'num-children' field, NOT the child/left/right fields
 function convertFlatPlanToTree(flatPlan: any[]): any {
-  console.log('=== convertFlatPlanToTree CALLED ===')
-  console.log('Input flatPlan:', flatPlan)
-  console.log('Is array:', Array.isArray(flatPlan))
-  console.log('Length:', flatPlan?.length)
 
   if (!Array.isArray(flatPlan) || flatPlan.length === 0) {
-    console.log('Returning null: not an array or empty')
     return null
   }
 
@@ -151,7 +146,6 @@ function convertFlatPlanToTree(flatPlan: any[]): any {
     const node = { ...array[startIndex] }
     const numChildren = node['num-children'] || 0
 
-    console.log(`Reconstructing node at index ${startIndex}: ${node.class}, num-children=${numChildren}`)
 
     // Recursively reconstruct children
     let nextIndex = startIndex + 1
@@ -165,7 +159,6 @@ function convertFlatPlanToTree(flatPlan: any[]): any {
       }
     }
 
-    console.log(`Node ${startIndex} (${node.class}) has ${node.children.length} children, next index=${nextIndex}`)
     return [node, nextIndex]
   }
 
@@ -177,7 +170,6 @@ function convertFlatPlanToTree(flatPlan: any[]): any {
     return null
   }
 
-  console.log('Successfully reconstructed tree, root class:', rootNode.class)
 
   // Transform to QueryPlanNode format
   return transformLogicalPlanNode(rootNode)
@@ -185,32 +177,18 @@ function convertFlatPlanToTree(flatPlan: any[]): any {
 
 // Parse plan JSON strings to get tree structures
 const referencePlanTree = computed(() => {
-  console.log('=== referencePlanTree computed ===')
-  console.log('selectedPlanType:', selectedPlanType.value)
-  console.log('props.referencePlan:', props.referencePlan)
-  console.log('props.referencePlan?.analyzed_logical_plan_json exists:', !!props.referencePlan?.analyzed_logical_plan_json)
-  console.log('props.referencePlan?.optimized_logical_plan_json exists:', !!props.referencePlan?.optimized_logical_plan_json)
-  console.log('props.referencePlan?.logical_plan_json exists:', !!props.referencePlan?.logical_plan_json)
-  console.log('props.referencePlan?.plan_tree exists:', !!props.referencePlan?.plan_tree)
 
   if (selectedPlanType.value === 'analyzed-logical') {
     const jsonStr = props.referencePlan?.analyzed_logical_plan_json
     if (!jsonStr) {
-      console.log('No analyzed logical plan JSON available')
       return null
     }
-    console.log('Trying to parse analyzed logical plan JSON...')
-    console.log('JSON length:', jsonStr.length)
     try {
       const parsed = JSON.parse(jsonStr)
-      console.log('Parsed successfully:', parsed)
-      console.log('Parsed is array:', Array.isArray(parsed))
       if (Array.isArray(parsed)) {
         const tree = convertFlatPlanToTree(parsed)
-        console.log('convertFlatPlanToTree returned:', tree)
         return tree
       }
-      console.log('Parsed is not array, returning as-is')
       return parsed
     } catch (e) {
       console.error('Error parsing reference analyzed logical plan:', e)
@@ -220,61 +198,38 @@ const referencePlanTree = computed(() => {
     // Try new field first, then fallback to deprecated field
     const jsonStr = props.referencePlan?.optimized_logical_plan_json || props.referencePlan?.logical_plan_json
     if (!jsonStr) {
-      console.log('No optimized logical plan JSON available')
       return null
     }
-    console.log('Trying to parse optimized logical plan JSON...')
-    console.log('JSON length:', jsonStr.length)
     try {
       const parsed = JSON.parse(jsonStr)
-      console.log('Parsed successfully:', parsed)
-      console.log('Parsed is array:', Array.isArray(parsed))
       if (Array.isArray(parsed)) {
         const tree = convertFlatPlanToTree(parsed)
-        console.log('convertFlatPlanToTree returned:', tree)
         return tree
       }
-      console.log('Parsed is not array, returning as-is')
       return parsed
     } catch (e) {
       console.error('Error parsing reference optimized logical plan:', e)
       return null
     }
   } else if (selectedPlanType.value === 'physical' && props.referencePlan?.plan_tree) {
-    console.log('Returning physical plan_tree')
     return props.referencePlan.plan_tree
   }
-  console.log('No plan available, returning null')
   return null
 })
 
 const optimizedPlanTree = computed(() => {
-  console.log('=== optimizedPlanTree computed ===')
-  console.log('selectedPlanType:', selectedPlanType.value)
-  console.log('props.optimizedPlan:', props.optimizedPlan)
-  console.log('props.optimizedPlan?.analyzed_logical_plan_json exists:', !!props.optimizedPlan?.analyzed_logical_plan_json)
-  console.log('props.optimizedPlan?.optimized_logical_plan_json exists:', !!props.optimizedPlan?.optimized_logical_plan_json)
-  console.log('props.optimizedPlan?.logical_plan_json exists:', !!props.optimizedPlan?.logical_plan_json)
-  console.log('props.optimizedPlan?.plan_tree exists:', !!props.optimizedPlan?.plan_tree)
 
   if (selectedPlanType.value === 'analyzed-logical') {
     const jsonStr = props.optimizedPlan?.analyzed_logical_plan_json
     if (!jsonStr) {
-      console.log('No analyzed logical plan JSON available')
       return null
     }
-    console.log('Trying to parse analyzed logical plan JSON...')
-    console.log('JSON length:', jsonStr.length)
     try {
       const parsed = JSON.parse(jsonStr)
-      console.log('Parsed successfully:', parsed)
-      console.log('Parsed is array:', Array.isArray(parsed))
       if (Array.isArray(parsed)) {
         const tree = convertFlatPlanToTree(parsed)
-        console.log('convertFlatPlanToTree returned:', tree)
         return tree
       }
-      console.log('Parsed is not array, returning as-is')
       return parsed
     } catch (e) {
       console.error('Error parsing optimized analyzed logical plan:', e)
@@ -284,31 +239,22 @@ const optimizedPlanTree = computed(() => {
     // Try new field first, then fallback to deprecated field
     const jsonStr = props.optimizedPlan?.optimized_logical_plan_json || props.optimizedPlan?.logical_plan_json
     if (!jsonStr) {
-      console.log('No optimized logical plan JSON available')
       return null
     }
-    console.log('Trying to parse optimized logical plan JSON...')
-    console.log('JSON length:', jsonStr.length)
     try {
       const parsed = JSON.parse(jsonStr)
-      console.log('Parsed successfully:', parsed)
-      console.log('Parsed is array:', Array.isArray(parsed))
       if (Array.isArray(parsed)) {
         const tree = convertFlatPlanToTree(parsed)
-        console.log('convertFlatPlanToTree returned:', tree)
         return tree
       }
-      console.log('Parsed is not array, returning as-is')
       return parsed
     } catch (e) {
       console.error('Error parsing optimized optimized logical plan:', e)
       return null
     }
   } else if (selectedPlanType.value === 'physical' && props.optimizedPlan?.plan_tree) {
-    console.log('Returning physical plan_tree')
     return props.optimizedPlan.plan_tree
   }
-  console.log('No plan available, returning null')
   return null
 })
 

@@ -217,6 +217,24 @@ async def generate_visualization_data(hypergraph: Hypergraph):
                         "classes": "hyperedge-connection"
                     })
 
+        # Tag the guard relation and any uncovered output variables so the
+        # viewer can highlight *why* a query is (un)guarded. The guard relation
+        # is rendered as the hyperedge node "<edge.id>_node"; uncovered output
+        # variables are equivalence-class nodes whose id == node.id.
+        guard_node_id = f"{hypergraph.guard_edge_id}_node" if hypergraph.guard_edge_id else None
+        uncovered_ids = set(hypergraph.uncovered_output_nodes or [])
+        for el in elements:
+            eid = el["data"].get("id")
+            cls = el.get("classes", "")
+            if guard_node_id and eid == guard_node_id:
+                el["classes"] = (cls + " guard").strip()
+            if eid in uncovered_ids:
+                el["classes"] = (cls + " uncovered").strip()
+
+        guard_edge = next((e for e in hypergraph.edges if e.id == hypergraph.guard_edge_id), None)
+        guard_label = (guard_edge.label or guard_edge.id) if guard_edge else None
+        uncovered_labels = [n.label for n in hypergraph.nodes if n.id in uncovered_ids]
+
         # Generate layout hints
         layout = {
             "name": "cose",  # Force-directed layout works well for hypergraphs
@@ -234,7 +252,11 @@ async def generate_visualization_data(hypergraph: Hypergraph):
                 "hypertree_width": hypergraph.hypertree_width,
                 "num_relations": hypergraph.num_relations,
                 "num_joins": hypergraph.num_joins,
-                "num_aggregates": hypergraph.num_aggregates
+                "num_aggregates": hypergraph.num_aggregates,
+                "is_guarded": hypergraph.is_guarded,
+                "guardedness_type": hypergraph.guardedness_type,
+                "guard_label": guard_label,
+                "uncovered_output_labels": uncovered_labels
             }
         }
 

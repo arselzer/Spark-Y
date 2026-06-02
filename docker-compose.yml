@@ -66,6 +66,16 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=imdb
+      # Startup auto-load + warm-up (OFF by default — opt in only when you want
+      # a hands-off restart and won't be loading data manually, since a
+      # background load competes with manual imports for Postgres/CPU).
+      # To enable, set these in a .env file or your shell, e.g.:
+      #   SPARK_Y_AUTOLOAD_DUMP=stats.sql.gz
+      #   SPARK_Y_AUTOLOAD_DB=stats
+      #   SPARK_Y_PREWARM_QUERIES=stats_009-033,stats_011-050
+      - SPARK_Y_AUTOLOAD_DUMP=${SPARK_Y_AUTOLOAD_DUMP:-}
+      - SPARK_Y_AUTOLOAD_DB=${SPARK_Y_AUTOLOAD_DB:-}
+      - SPARK_Y_PREWARM_QUERIES=${SPARK_Y_PREWARM_QUERIES:-}
     networks:
       - spark-y-network
     # Allow backend to access databases on host machine

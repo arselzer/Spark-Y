@@ -5,6 +5,8 @@ FastAPI backend for query execution and visualization
 from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
+import os
 import logging
 
 from app.api import queries, execution, hypergraph, data_import
@@ -16,6 +18,74 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+async def _prewarm():
+    """Best-effort: auto-load a bundled dump and warm a few queries on startup.
+
+    Opt-in via env so a container restart leaves the demo ready instead of an
+    empty Spark session. Controlled by:
+      SPARK_Y_AUTOLOAD_DUMP  e.g. "stats.sql.gz"   (filename in data/sql-dumps)
+      SPARK_Y_AUTOLOAD_DB    e.g. "stats"          (target Postgres database)
+      SPARK_Y_PREWARM_QUERIES e.g. "stats_009-033,stats_011-050" (optional)
+    Runs in the background; any failure is logged and ignored.
+    """
+    # Fast path: load a previously materialised Parquet dataset. Registration is
+    # lazy (no scan), so a restart comes back in seconds and needs no Postgres.
+    #   SPARK_Y_AUTOLOAD_PARQUET  e.g. "imdb"  (dataset under data/parquet)
+    parquet_db = os.getenv("SPARK_Y_AUTOLOAD_PARQUET")
+    if parquet_db:
+        try:
+            from app.api.data_import import load_from_parquet
+            await asyncio.sleep(5)
+            logger.info(f"[prewarm] loading Parquet dataset '{parquet_db}'")
+            await load_from_parquet(database=parquet_db)
+            logger.info("[prewarm] Parquet dataset loaded")
+            await _warm_queries()
+        except Exception as e:
+            logger.warning(f"[prewarm] Parquet autoload aborted: {e}")
+        return
+
+    dump = os.getenv("SPARK_Y_AUTOLOAD_DUMP")
+    db = os.getenv("SPARK_Y_AUTOLOAD_DB")
+    if not dump or not db:
+        return
+    try:
+        from app.api.data_import import create_database, load_sql_dump_from_library
+        # Give Postgres a moment to accept connections after compose start.
+        await asyncio.sleep(5)
+        logger.info(f"[prewarm] ensuring database '{db}' exists")
+        try:
+            await create_database(database_name=db, owner="postgres")
+        except Exception as e:
+            logger.info(f"[prewarm] create_database: {e} (likely already exists)")
+        logger.info(f"[prewarm] loading dump '{dump}' into '{db}'")
+        await load_sql_dump_from_library(dump, database=db)
+        logger.info("[prewarm] dump loaded; warming queries")
+        await _warm_queries()
+        logger.info("[prewarm] done")
+    except Exception as e:
+        logger.warning(f"[prewarm] aborted: {e}")
+
+
+async def _warm_queries():
+    """Warm the JVM / plan cache with the SPARK_Y_PREWARM_QUERIES featured set."""
+    ids = os.getenv("SPARK_Y_PREWARM_QUERIES", "")
+    query_ids = [q.strip() for q in ids.split(",") if q.strip()]
+    if not query_ids:
+        return
+    from app.api.queries import load_queries
+    catalog = {q.query_id: q for q in load_queries()}
+    sm = get_spark_manager()
+    for qid in query_ids:
+        q = catalog.get(qid)
+        if not q:
+            continue
+        try:
+            await sm.execute_query(sql=q.sql, use_optimization=True, collect_results=False)
+            logger.info(f"[prewarm] warmed {qid}")
+        except Exception as e:
+            logger.info(f"[prewarm] warm {qid} failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup Spark session"""
@@ -24,6 +94,9 @@ async def lifespan(app: FastAPI):
     await spark_manager.initialize()
     set_spark_manager(spark_manager)
     logger.info("Spark session initialized successfully")
+
+    # Kick off optional auto-load + warm-up without blocking startup.
+    asyncio.create_task(_prewarm())
 
     yield
 

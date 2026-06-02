@@ -116,7 +116,7 @@ function formatValue(value: any): string {
 }
 
 .node-header:hover {
-  background: #E5E7EB;
+  background: var(--color-border);
 }
 
 .toggle-btn {
@@ -190,7 +190,7 @@ function formatValue(value: any): string {
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
   border: 1px solid var(--color-border);
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.25rem;
   cursor: pointer;
   color: var(--color-text-secondary);
@@ -205,7 +205,7 @@ function formatValue(value: any): string {
 .node-details {
   margin-top: 0.5rem;
   padding: 1rem;
-  background: #F9FAFB;
+  background: var(--color-background-soft);
   border-left: 3px solid var(--color-primary);
   border-radius: 0.25rem;
   font-size: 0.8125rem;
@@ -259,7 +259,7 @@ function formatValue(value: any): string {
 
 .output-attr {
   padding: 0.25rem 0.5rem;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   font-family: 'Monaco', 'Menlo', monospace;

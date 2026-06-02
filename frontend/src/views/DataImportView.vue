@@ -197,6 +197,52 @@
           </div>
         </div>
 
+        <div class="import-card">
+          <h3>Parquet Materialisation</h3>
+          <p>
+            Persist the current database to Parquet for fast, Postgres-free loads.
+            Build once (a full read of each table); afterwards Spark loads it in seconds and
+            queries no longer re-scan Postgres — so the optimisation's speedups show.
+          </p>
+          <button
+            type="button"
+            class="btn btn-primary btn-large"
+            :disabled="materializingParquet"
+            @click="materializeParquet"
+          >
+            {{ materializingParquet ? 'Materialising…' : `Materialise “${config.database}” to Parquet` }}
+          </button>
+
+          <div v-if="materializingParquet" class="loading-section">
+            <div class="spinner"></div>
+            <p>Reading all tables and writing Parquet (one-time)…</p>
+          </div>
+          <div v-if="parquetResult" class="result-message" :class="parquetResult.success ? 'success' : 'error'">
+            {{ parquetResult.message }}
+          </div>
+
+          <div v-if="parquetDatasets.length" style="margin-top:1rem;">
+            <h4>Load from Parquet (fast)</h4>
+            <ul style="list-style:none;padding:0;margin:0.5rem 0 0;display:flex;flex-direction:column;gap:0.5rem;">
+              <li
+                v-for="d in parquetDatasets"
+                :key="d.database"
+                style="display:flex;align-items:center;justify-content:space-between;gap:1rem;border:1px solid var(--color-border);border-radius:0.4rem;padding:0.5rem 0.75rem;"
+              >
+                <span><strong>{{ d.database }}</strong> · {{ d.table_count }} tables</span>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  :disabled="loadingParquet !== null"
+                  @click="loadParquet(d.database)"
+                >
+                  {{ loadingParquet === d.database ? 'Loading…' : 'Load' }}
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+
         <div class="export-card">
           <h3>Export to SQL Dump</h3>
           <p>Create a demo database SQL file (samples large tables)</p>
@@ -738,6 +784,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import axios from 'axios'
 import FKMapEditor from '@/components/FKMapEditor.vue'
+import { dataImportApi } from '@/services/api'
 
 interface PostgresConfig {
   host: string
@@ -1478,6 +1525,46 @@ watch(smartSampling, (newValue) => {
   }
 })
 
+// ── Parquet materialisation ──────────────────────────────────────────────
+const materializingParquet = ref(false)
+const loadingParquet = ref<string | null>(null)
+const parquetResult = ref<{ success: boolean; message: string } | null>(null)
+const parquetDatasets = ref<{ database: string; table_count: number; tables: string[] }[]>([])
+
+async function refreshParquetDatasets() {
+  try {
+    parquetDatasets.value = (await dataImportApi.listParquetDatasets()).datasets
+  } catch {
+    /* non-fatal */
+  }
+}
+async function materializeParquet() {
+  materializingParquet.value = true
+  parquetResult.value = null
+  try {
+    const r = await dataImportApi.materializeParquet({ ...config.value })
+    parquetResult.value = { success: r.success, message: r.message }
+    await refreshParquetDatasets()
+  } catch (e: any) {
+    parquetResult.value = { success: false, message: e?.response?.data?.detail || e?.message || 'Materialisation failed' }
+  } finally {
+    materializingParquet.value = false
+  }
+}
+async function loadParquet(database: string) {
+  loadingParquet.value = database
+  parquetResult.value = null
+  try {
+    const r = await dataImportApi.loadParquet(database)
+    parquetResult.value = { success: r.success, message: r.message }
+  } catch (e: any) {
+    parquetResult.value = { success: false, message: e?.response?.data?.detail || e?.message || 'Load failed' }
+  } finally {
+    loadingParquet.value = null
+  }
+}
+onMounted(refreshParquetDatasets)
+
 onMounted(() => {
   loadTables()
   loadDumpsList()
@@ -1511,7 +1598,7 @@ onMounted(() => {
 .import-sql-card,
 .sql-library-card,
 .tables-card {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   padding: 2rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -1821,7 +1908,7 @@ onMounted(() => {
 
 .file-input:hover {
   border-color: var(--color-primary);
-  background: white;
+  background: var(--color-surface);
 }
 
 .selected-file {
@@ -1977,7 +2064,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   cursor: pointer;
@@ -2022,7 +2109,7 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
+  background: var(--color-surface);
   border-radius: 0.5rem;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   max-width: 800px;
@@ -2284,7 +2371,7 @@ onMounted(() => {
   padding: 1.5rem;
   text-align: center;
   color: var(--color-text-secondary);
-  background: white;
+  background: var(--color-surface);
   border: 1px dashed var(--color-border);
   border-radius: 0.375rem;
 }
@@ -2300,7 +2387,7 @@ onMounted(() => {
   align-items: flex-start;
   gap: 1rem;
   padding: 1rem;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 0.375rem;
   cursor: pointer;

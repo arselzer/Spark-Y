@@ -23,31 +23,26 @@
     </div>
 
     <div v-else>
-    <h2>Performance Analysis</h2>
+    <!-- Sticky in-page navigation -->
+    <nav class="section-nav">
+      <button
+        v-for="item in navItems"
+        :key="item.key"
+        class="section-nav-btn"
+        @click="goToSection(item.key, item.section)"
+      >{{ item.label }}</button>
+    </nav>
 
-    <!-- Executive Summary Cards -->
-    <div class="summary-cards">
-      <div class="metric-card speedup">
-        <div class="metric-label">Speedup</div>
-        <div class="metric-value">{{ speedup.toFixed(2) }}x</div>
-        <div class="metric-change">{{ ((speedup - 1) * 100).toFixed(0) }}% faster</div>
-      </div>
-
-      <div class="metric-card memory">
-        <div class="metric-label">Shuffle Reduced</div>
-        <div class="metric-value">{{ formatBytes(shuffleReduced) }}</div>
-        <div class="metric-change" v-if="shuffleReductionPct > 0">{{ shuffleReductionPct }}% less</div>
-      </div>
-
-      <div class="metric-card stages">
-        <div class="metric-label">Stages</div>
-        <div class="metric-value">{{ stagesReduced >= 0 ? stagesReduced : 0 }}</div>
-        <div class="metric-change">{{ referenceMetrics.num_stages }} → {{ optimizedMetrics.num_stages }}</div>
-      </div>
+    <!-- Peak intermediate materialisation (the paper's core story) -->
+    <div id="sec-summary">
+      <PeakIntermediateBar
+        :reference-metrics="referenceMetrics"
+        :optimized-metrics="optimizedMetrics"
+      />
     </div>
 
     <!-- Side-by-Side Execution Breakdown -->
-    <div class="execution-breakdown collapsible-section">
+    <div id="sec-breakdown" class="execution-breakdown collapsible-section">
       <h3 class="section-header" @click="toggleSection('breakdown')">
         <span class="toggle-icon">{{ sectionsExpanded.breakdown ? '▼' : '▶' }}</span>
         Execution Breakdown
@@ -61,7 +56,7 @@
 
           <div class="time-info">
             <div class="time-label">Total Time</div>
-            <div class="time-value">{{ referenceMetrics.execution_time_ms.toFixed(2) }} ms</div>
+            <div class="time-value" :class="{ timeout: referenceTimedOut }">{{ referenceTimeLabel }}</div>
           </div>
 
           <div class="shuffle-info" v-if="referenceMetrics.shuffle_write_bytes > 0">
@@ -99,7 +94,7 @@
     </div>
 
     <!-- Detailed Metrics Table -->
-    <div class="detailed-metrics collapsible-section">
+    <div id="sec-metrics" class="detailed-metrics collapsible-section">
       <h3 class="section-header" @click="toggleSection('metrics')">
         <span class="toggle-icon">{{ sectionsExpanded.metrics ? '▼' : '▶' }}</span>
         Detailed Metrics
@@ -119,10 +114,10 @@
         <tbody>
           <tr>
             <td>Execution Time</td>
-            <td>{{ referenceMetrics.execution_time_ms.toFixed(2) }} ms</td>
+            <td>{{ referenceTimedOut ? referenceTimeLabel : `${referenceMetrics.execution_time_ms.toFixed(2)} ms` }}</td>
             <td>{{ optimizedMetrics.execution_time_ms.toFixed(2) }} ms</td>
             <td class="improvement">
-              {{ (referenceMetrics.execution_time_ms - optimizedMetrics.execution_time_ms).toFixed(2) }} ms
+              {{ referenceTimedOut ? '—' : `${(referenceMetrics.execution_time_ms - optimizedMetrics.execution_time_ms).toFixed(2)} ms` }}
             </td>
           </tr>
           <tr v-if="referenceMetrics.planning_time_ms">
@@ -133,9 +128,9 @@
           </tr>
           <tr>
             <td>Number of Stages</td>
-            <td>{{ referenceMetrics.num_stages }}</td>
+            <td>{{ referenceTimedOut ? '—' : referenceMetrics.num_stages }}</td>
             <td>{{ optimizedMetrics.num_stages }}</td>
-            <td class="improvement">{{ stagesReduced }} fewer</td>
+            <td class="improvement">{{ referenceTimedOut ? '—' : `${stagesReduced} fewer` }}</td>
           </tr>
           <tr v-if="referenceMetrics.shuffle_read_bytes > 0">
             <td>Shuffle Read</td>
@@ -186,22 +181,8 @@
       </div>
     </div>
 
-    <!-- Operator Metrics Table -->
-    <div class="collapsible-section">
-      <h3 class="section-header" @click="toggleSection('operatorMetrics')">
-        <span class="toggle-icon">{{ sectionsExpanded.operatorMetrics ? '▼' : '▶' }}</span>
-        Operator Comparison
-      </h3>
-      <div v-if="sectionsExpanded.operatorMetrics" class="section-content">
-    <OperatorMetricsTable
-      :reference-metrics="referenceMetrics"
-      :optimized-metrics="optimizedMetrics"
-    />
-      </div>
-    </div>
-
     <!-- Operator DAG Visualization -->
-    <div class="collapsible-section">
+    <div id="sec-operatorDag" class="collapsible-section">
       <h3 class="section-header" @click="toggleSection('operatorDag')">
         <span class="toggle-icon">{{ sectionsExpanded.operatorDag ? '▼' : '▶' }}</span>
         Operator Flow DAG
@@ -210,11 +191,14 @@
           <span>Stack vertically</span>
         </label>
       </h3>
-      <div v-if="sectionsExpanded.operatorDag" class="section-content resizable-section" :style="{ height: sectionHeights.operatorDag + 'px' }">
+      <div v-if="sectionsExpanded.operatorDag" class="section-content">
+        <!-- No fixed-height scroll box: the two DAGs flow one after another on
+             the page (stacked) at full height; the page scrolls naturally. -->
         <div :class="['dag-comparison', { 'dag-stacked': dagLayoutStacked }]">
           <OperatorDagVisualization
             v-if="referenceMetrics.operator_metrics && referenceMetrics.operator_metrics.length > 0"
             :operator-metrics="referenceMetrics.operator_metrics"
+            :global-max-rows="sharedMaxOperatorRows"
             title="Reference Execution"
           />
           <div v-else class="no-operator-data">
@@ -224,16 +208,18 @@
           <OperatorDagVisualization
             v-if="optimizedMetrics.operator_metrics && optimizedMetrics.operator_metrics.length > 0"
             :operator-metrics="optimizedMetrics.operator_metrics"
+            :global-max-rows="sharedMaxOperatorRows"
             title="Optimized Execution"
           />
           <div v-else class="no-operator-data">
             <p>No operator metrics available for optimized execution</p>
           </div>
         </div>
-        <!-- Section resize handle -->
-        <div class="section-resize-handle" @mousedown="startSectionResize($event, 'operatorDag')" title="Drag to resize section height"></div>
       </div>
     </div>
+
+    <!-- Injected by ExecuteView: Query Complexity, positioned below the DAG -->
+    <slot name="after-dag" />
 
     <!-- Execution Timeline (moved below DAG) -->
     <div class="collapsible-section">
@@ -252,8 +238,11 @@
       </div>
     </div>
 
+    <!-- Injected by ExecuteView: GYO animation, positioned below the timeline -->
+    <slot name="after-timeline" />
+
     <!-- Hypergraph Visualization -->
-    <div v-if="hasHypergraph" class="collapsible-section">
+    <div v-if="hasHypergraph" id="sec-hypergraph" class="collapsible-section">
       <h3 class="section-header" @click="toggleSection('hypergraph')">
         <span class="toggle-icon">{{ sectionsExpanded.hypergraph ? '▼' : '▶' }}</span>
         Hypergraph Visualization
@@ -307,7 +296,7 @@
     </div>
 
     <!-- Data Flow Sankey -->
-    <div class="collapsible-section">
+    <div id="sec-dataFlow" class="collapsible-section">
       <h3 class="section-header" @click="toggleSection('dataFlow')">
         <span class="toggle-icon">{{ sectionsExpanded.dataFlow ? '▼' : '▶' }}</span>
         Data Flow Visualization
@@ -324,7 +313,7 @@
     </div>
 
     <!-- Physical Plan Comparison -->
-    <div class="collapsible-section">
+    <div id="sec-planComparison" class="collapsible-section">
       <h3 class="section-header" @click="toggleSection('planComparison')">
         <span class="toggle-icon">{{ sectionsExpanded.planComparison ? '▼' : '▶' }}</span>
         Physical Plan Comparison
@@ -358,14 +347,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { usePreferences } from '@/composables/usePreferences'
 import ExecutionTimeline from './ExecutionTimeline.vue'
 import TimeBreakdown from './TimeBreakdown.vue'
 import OperatorFlowVisualization from './OperatorFlowVisualization.vue'
-import OperatorMetricsTable from './OperatorMetricsTable.vue'
 import OperatorDagVisualization from './OperatorDagVisualization.vue'
 import DataFlowSankey from './DataFlowSankey.vue'
+import PeakIntermediateBar from './PeakIntermediateBar.vue'
 import PhysicalPlanComparison from './PhysicalPlanComparison.vue'
 import PlanTreeExplorer from './PlanTreeExplorer.vue'
 import HypergraphViewer from './HypergraphViewer.vue'
@@ -380,6 +369,21 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+
+// Shared maximum operator output-row count across the reference and optimised
+// plans. Passed to both DAGs so their arrow widths/colours are normalised on
+// the same scale — otherwise the optimised plan's smaller, more uniform row
+// counts render as thick/red as the reference plan's, which misleadingly
+// suggests the optimisation produces a larger intermediate.
+const sharedMaxOperatorRows = computed(() => {
+  const rowsOf = (m: any): number[] =>
+    (m?.operator_metrics ?? []).map((op: any) => Number(op.num_output_rows) || 0)
+  return Math.max(
+    1,
+    ...rowsOf(props.referenceMetrics),
+    ...rowsOf(props.optimizedMetrics)
+  )
+})
 
 // Load preferences
 const { preferences, setDagLayoutStacked, setSectionExpanded } = usePreferences()
@@ -411,6 +415,40 @@ watch(sectionsExpanded, (newValue) => {
 function toggleSection(section: keyof typeof sectionsExpanded.value) {
   sectionsExpanded.value[section] = !sectionsExpanded.value[section]
 }
+
+// Sticky in-page nav. Each item scrolls to a section anchor and expands the
+// matching collapsible section (if any) so the target isn't hidden.
+const navItems = [
+  { key: 'sec-summary', label: 'Summary', section: null },
+  { key: 'sec-breakdown', label: 'Breakdown', section: 'breakdown' },
+  { key: 'sec-metrics', label: 'Metrics', section: 'metrics' },
+  { key: 'sec-operatorDag', label: 'Operators', section: 'operatorDag' },
+  { key: 'sec-dataFlow', label: 'Data Flow', section: 'dataFlow' },
+  { key: 'sec-hypergraph', label: 'Hypergraph', section: 'hypergraph' },
+  { key: 'sec-planComparison', label: 'Plans', section: 'planComparison' },
+] as const
+
+function goToSection(anchorId: string, section: string | null) {
+  if (section && section in sectionsExpanded.value) {
+    sectionsExpanded.value[section as keyof typeof sectionsExpanded.value] = true
+  }
+  nextTick(() => {
+    document.getElementById(anchorId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+// Reference run that exceeded the execution budget: its metrics are a
+// placeholder (time = the budget), so wherever we'd show a reference figure we
+// show "Timeout (>Ns)" and treat derived comparisons as lower bounds.
+const referenceTimedOut = computed(() => !!props.referenceMetrics?.timed_out)
+
+const referenceTimeLabel = computed(() => {
+  if (referenceTimedOut.value) {
+    const budgetS = Math.round((props.referenceMetrics?.execution_time_ms ?? 0) / 1000)
+    return `Timeout (>${budgetS}s)`
+  }
+  return `${props.referenceMetrics.execution_time_ms.toFixed(2)} ms`
+})
 
 const speedup = computed(() => {
   if (!props.optimizedMetrics?.execution_time_ms || props.optimizedMetrics.execution_time_ms === 0) return 1
@@ -465,7 +503,7 @@ function formatBytes(bytes: number): string {
 }
 
 // ===== Resizable Container Width =====
-const containerWidth = ref(1800)
+const containerWidth = ref(2000)
 
 // ===== Resizable Section Heights =====
 const sectionHeights = ref<Record<string, number>>({
@@ -621,8 +659,44 @@ function startWidthResize(e: MouseEvent) {
 }
 
 /* Collapsible sections */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 0;
+  margin-bottom: 1rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section-nav-btn {
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 9999px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.section-nav-btn:hover {
+  color: #fff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
 .collapsible-section {
   margin-bottom: 2rem;
+  scroll-margin-top: 56px;  /* offset for the sticky nav when scrolling to anchors */
+}
+
+.summary-cards {
+  scroll-margin-top: 56px;
 }
 
 .section-header {
@@ -807,8 +881,8 @@ function startWidthResize(e: MouseEvent) {
 }
 
 .badge-reference {
-  background: #e5e7eb;
-  color: #374151;
+  background: var(--color-border);
+  color: var(--color-text);
 }
 
 .badge-optimized {
@@ -837,6 +911,11 @@ function startWidthResize(e: MouseEvent) {
 
 .time-value.improved {
   color: #22c55e;
+}
+
+.time-value.timeout {
+  color: var(--color-warning, #c2410c);
+  font-size: 1.25rem;
 }
 
 .shuffle-info {
@@ -902,12 +981,12 @@ function startWidthResize(e: MouseEvent) {
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
   margin-top: 1rem;
-  height: calc(100% - 1rem);
+  height: auto;
 }
 
-/* DAG fills parent height */
+/* Each DAG has an explicit height (the section no longer constrains it). */
 .dag-comparison :deep(.operator-dag) {
-  height: 100%;
+  height: 620px;
   max-width: 100%;
   width: 100%;
   overflow: hidden;
@@ -926,6 +1005,13 @@ function startWidthResize(e: MouseEvent) {
 
 .dag-comparison.dag-stacked {
   grid-template-columns: 1fr;
+  height: auto;  /* grow to fit both DAGs; the section scrolls if needed */
+}
+
+/* Stacked: give each DAG a tall, usable height so the whole graph fits
+   (instead of splitting the section ~50/50 and cramping both). */
+.dag-comparison.dag-stacked :deep(.operator-dag) {
+  height: 620px;
 }
 
 .layout-toggle {

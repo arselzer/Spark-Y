@@ -109,6 +109,17 @@ body {
   border-color: var(--color-primary);
 }
 
+/* Visible keyboard focus everywhere (mouse clicks don't trigger :focus-visible) */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.input:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.35);
+}
+
 .badge {
   display: inline-block;
   padding: 0.25rem 0.75rem;
@@ -132,6 +143,21 @@ body {
   color: #92400E;
 }
 
+/* Per-benchmark badge palette */
+.badge-job    { background-color: #DBEAFE; color: #1E40AF; }
+.badge-tpch   { background-color: #FCE7F3; color: #9D174D; }
+.badge-tpcds  { background-color: #EDE9FE; color: #5B21B6; }
+.badge-stats  { background-color: #FEF3C7; color: #92400E; }
+.badge-snap   { background-color: #D1FAE5; color: #065F46; }
+.badge-custom { background-color: #E5E7EB; color: #374151; }
+
+html.dark-mode .badge-job    { background-color: #1E3A8A; color: #DBEAFE; }
+html.dark-mode .badge-tpch   { background-color: #831843; color: #FCE7F3; }
+html.dark-mode .badge-tpcds  { background-color: #4C1D95; color: #EDE9FE; }
+html.dark-mode .badge-stats  { background-color: #78350F; color: #FEF3C7; }
+html.dark-mode .badge-snap   { background-color: #064E3B; color: #D1FAE5; }
+html.dark-mode .badge-custom { background-color: #374151; color: #E5E7EB; }
+
 /* Grid layouts */
 .grid {
   display: grid;
@@ -154,7 +180,7 @@ body {
 
 /* Loading spinner */
 .spinner {
-  border: 3px solid rgba(0, 0, 0, 0.1);
+  border: 3px solid var(--color-border);
   border-top-color: var(--color-primary);
   border-radius: 50%;
   width: 2rem;
